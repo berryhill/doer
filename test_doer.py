@@ -71,6 +71,28 @@ class DoerTests(unittest.TestCase):
         self.assertEqual(result.attempts, 3)
         self.assertEqual(len(calls), 3)
 
+    def test_selection_after_gate_is_retained_across_retries(self):
+        events = []
+        def choose(task):
+            events.append("select")
+            return "gpt-6-astra"
+        def implement(prompt, model):
+            events.append(model)
+            return "work"
+        result = run("task", lambda task: Gate(True, True), implement,
+                     lambda task, work: Verdict(False, False, False, False),
+                     lambda task, work, failed: "repair", select=choose)
+        self.assertEqual(result.attempts, 3)
+        self.assertEqual(events, ["select", "gpt-6-astra", "gpt-6-astra", "gpt-6-astra"])
+
+    def test_gate_failure_never_selects(self):
+        result = run("task", lambda task: Gate(False, False),
+                     lambda prompt, model: self.fail("implemented"),
+                     lambda task, work: self.fail("judged"),
+                     lambda task, work, failed: "clarify",
+                     select=lambda task: self.fail("selected"))
+        self.assertEqual(result.status, "needs_input")
+
 
 if __name__ == "__main__":
     unittest.main()

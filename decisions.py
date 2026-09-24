@@ -52,6 +52,44 @@ class DecisionClient:
                        answers.get(name, {}).get(score, 0) >= threshold)
                 for name in questions}
 
+    def route(self, task: str, candidates: tuple[str, ...]) -> dict:
+        """Choose one bounded implementation model; fail closed to Sol on weak output."""
+        guidance = {
+            "gpt-6-luna": "Simple, localized task such as a typo, small text file or mechanical edit; minimal reasoning.",
+            "gpt-6-sol": "Ordinary coding: bug fix, parser, tests, CLI feature or moderate multi-file change.",
+            "gpt-6-astra": "Difficult reasoning, security architecture, concurrency design or cross-system tradeoffs.",
+        }
+        schema = {"implementation_model": {
+            "type": "choice",
+            "instructions": "Choose the least costly capable model for this task: Luna for simple edits, Sol for ordinary coding, Astra for complex architecture or difficult reasoning; use a 900k alias only if the task needs unusually long context. Pick one exact option; do not invent names.",
+            "criteria": {name: (guidance[name.removesuffix("-900k")] +
+                                 (" Requires unusually long context (900k)." if name.endswith("-900k") else
+                                  " Normal context fits.")) for name in candidates},
+        }}
+        state = json.dumps({"task": task, "candidates": candidates})
+        if self.backend == "laya":
+            if self._router is None:
+                from laya import Router
+                object.__setattr__(self, "_router", Router())
+            answer = self._router.predict(state, schema).get("answers", {}).get("implementation_model", {})
+            score, threshold = "answer_confidence", 0.6
+        else:
+            req = urllib.request.Request(self.url, data=json.dumps({
+                "state": state, "model": "jev-latest", "questions": schema}).encode(),
+                headers={"Content-Type": "application/json", "Authorization": "Bearer " + self.api_key},
+                method="POST")
+            with urllib.request.urlopen(req, timeout=90) as response:
+                answer = json.load(response).get("answers", {}).get("implementation_model", {})
+            score, threshold = "confidence", 0.8
+        if not isinstance(answer, dict):
+            answer = {}
+        choice, confidence = answer.get("choice"), answer.get(score)
+        valid = (isinstance(choice, str) and choice in candidates and
+                 isinstance(confidence, (int, float)) and not isinstance(confidence, bool) and
+                 0 <= confidence <= 1 and confidence >= threshold)
+        return {"model": choice if valid else "gpt-6-sol", "choice": choice,
+                "confidence": confidence, "reason": "selected" if valid else "fallback"}
+
 
 def make_client(backend: str = "laya") -> DecisionClient:
     if backend == "laya":

@@ -16,6 +16,8 @@ class Router:
         with Path(os.environ["FAKE_LAYA_LOG"]).open("a") as f: f.write("load\\n")
     def predict(self, state, questions):
         with Path(os.environ["FAKE_LAYA_LOG"]).open("a") as f: f.write("predict " + ",".join(questions) + "\\n")
+        if "implementation_model" in questions:
+            return {"answers": {"implementation_model": {"choice": "gpt-6-sol", "answer_confidence": 0.99}}}
         return {"answers": {key: {"choice": "yes", "answer_confidence": 0.99}
                             for key in questions}}
 '''
@@ -91,7 +93,7 @@ class IntegrationTests(unittest.TestCase):
             self.assertIn("Artifact missing", calls[-2]["prompt"])
             self.assertIn("moderate confidence", result["completion"])
             self.assertEqual([step["kind"] for step in result["trace"]],
-                             ["gate", "sol_implementation", "laya_judgment", "independent_verifier",
+                             ["gate", "model_selection", "sol_implementation", "laya_judgment", "independent_verifier",
                               "luna_diagnosis", "sol_implementation", "laya_judgment",
                               "independent_verifier", "luna_completion"])
             for call in calls:
@@ -99,7 +101,14 @@ class IntegrationTests(unittest.TestCase):
                 self.assertEqual(args[args.index("--in") + 1], str(work))
                 self.assertNotIn("--yolo", args)
             self.assertEqual(laya_log.read_text().splitlines()[0], "load")
-            self.assertEqual(len(laya_log.read_text().splitlines()), 4)  # one load, three predictions
+            if "--sol" in overrides:
+                self.assertEqual(len(laya_log.read_text().splitlines()), 4)
+                self.assertEqual(result["trace"][1]["evidence"]["reason"], "override")
+            else:
+                self.assertEqual(len(laya_log.read_text().splitlines()), 5)
+                self.assertEqual(result["trace"][1]["evidence"]["model"], "gpt-6-sol")
+            self.assertEqual([s["model"] for s in result["trace"] if s["kind"] == "sol_implementation"],
+                             [overrides[overrides.index("--sol") + 1] if "--sol" in overrides else "gpt-6-sol"] * 2)
             return calls
 
     def test_reported_success_does_not_pass_until_actual_artifact_exists(self):
@@ -112,13 +121,13 @@ class IntegrationTests(unittest.TestCase):
             if call["role"] == "luna":
                 self.assertEqual(call["args"][call["args"].index("-m") + 1], "gpt-6-luna")
             else:
-                self.assertNotIn("-m", call["args"])
+                self.assertEqual(call["args"][call["args"].index("-m") + 1], "gpt-6-sol")
 
     def test_luna_role_uses_luna_model_without_explicit_override(self):
         calls = self.run_fake()
         self.assertEqual([call["args"][call["args"].index("-m") + 1]
                           if "-m" in call["args"] else None for call in calls],
-                         [None, "gpt-6-luna", None, "gpt-6-luna"])
+                         ["gpt-6-sol", "gpt-6-luna", "gpt-6-sol", "gpt-6-luna"])
 
     def test_explicit_overrides_reach_both_separate_chats(self):
         calls = self.run_fake(("--profile", "alt", "--provider", "other",
@@ -147,7 +156,7 @@ class IntegrationTests(unittest.TestCase):
                     elif overrides == "--sol":
                         self.assertEqual(args[args.index("-m") + 1], value)
                     else:
-                        self.assertNotIn("-m", args)
+                        self.assertEqual(args[args.index("-m") + 1], "gpt-6-sol")
                     if overrides != "--profile":
                         self.assertNotIn("-p", args)
                     if overrides != "--provider":

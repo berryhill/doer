@@ -37,7 +37,7 @@ class Result:
 
 def run(task: str, gate: Callable, implement: Callable, judge: Callable,
         diagnose: Callable, max_attempts: int = 3, verify: Callable | None = None,
-        complete: Callable | None = None) -> Result:
+        complete: Callable | None = None, select: Callable | None = None) -> Result:
     """Run a fixed contract; always stop on the attempt limit, not necessarily success."""
     def finish(result):
         if complete is None:
@@ -56,9 +56,10 @@ def run(task: str, gate: Callable, implement: Callable, judge: Callable,
         missing = tuple(k for k, present in (("specified", contract.specified),
                                               ("result_defined", contract.result_defined)) if not present)
         return finish(Result("needs_input", 0, diagnose(task, "", missing)))
+    model = select(task) if select is not None else None
     prompt = task
     for attempt in range(1, max_attempts + 1):
-        work = implement(prompt)
+        work = implement(prompt, model) if select is not None else implement(prompt)
         verdict = judge(task, work)
         failed = verdict.failures()
         if verify is not None and not verify(task, work):

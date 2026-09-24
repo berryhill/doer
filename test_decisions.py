@@ -15,6 +15,32 @@ class Response:
 
 
 class DecisionsTests(unittest.TestCase):
+    def test_route_uses_exact_choice_and_falls_back_for_uncertain_or_invalid_answers(self):
+        candidates = ("gpt-6-astra", "gpt-6-sol", "gpt-6-luna",
+                      "gpt-6-astra-900k", "gpt-6-sol-900k", "gpt-6-luna-900k")
+        class FakeRouter:
+            answer = {"choice": "gpt-6-astra-900k", "answer_confidence": 0.92}
+            def predict(self, state, questions):
+                self.questions = questions
+                return {"answers": {"implementation_model": self.answer}}
+        router = FakeRouter()
+        client = make_client()
+        object.__setattr__(client, "_router", router)
+        selected = client.route("Build a complex parser", candidates)
+        self.assertEqual(selected["model"], "gpt-6-astra-900k")
+        self.assertEqual(set(router.questions["implementation_model"]["criteria"]), set(candidates))
+        criteria = router.questions["implementation_model"]["criteria"]
+        self.assertIn("typo", criteria["gpt-6-luna"])
+        self.assertIn("architecture", criteria["gpt-6-astra"])
+        for answer in ({"choice": "gpt-6-astra", "answer_confidence": 0.3},
+                       {"choice": "unknown", "answer_confidence": 0.99},
+                       {"choice": "gpt-6-astra"}, {}):
+            router.answer = answer
+            with self.subTest(answer=answer):
+                result = client.route("task", candidates)
+                self.assertEqual(result["model"], "gpt-6-sol")
+                self.assertEqual(result["reason"], "fallback")
+
     def test_default_is_in_process_laya_without_typesafe_credentials(self):
         with patch.dict("os.environ", {}, clear=True):
             client = make_client()
@@ -50,6 +76,19 @@ class DecisionsTests(unittest.TestCase):
         req = send.call_args.args[0]
         self.assertEqual(json.loads(req.data)["model"], "jev-latest")
         self.assertEqual(req.get_header("Authorization"), "Bearer secret")
+
+    def test_jev_route_uses_its_own_confidence_and_same_allowed_choices(self):
+        client = DecisionClient("jev", "https://api.typesafe.ai/v1/systemone", "secret")
+        candidates = ("gpt-6-astra", "gpt-6-sol", "gpt-6-luna")
+        with patch("decisions.urllib.request.urlopen", return_value=Response({"answers": {
+            "implementation_model": {"choice": "gpt-6-luna", "confidence": 0.85}}})) as send:
+            result = client.route("Fix a typo", candidates)
+        self.assertEqual(result["model"], "gpt-6-luna")
+        payload = json.loads(send.call_args.args[0].data)
+        self.assertEqual(set(payload["questions"]["implementation_model"]["criteria"]), set(candidates))
+        with patch("decisions.urllib.request.urlopen", return_value=Response({"answers": {
+            "implementation_model": {"choice": "gpt-6-luna", "confidence": 0.7}}})):
+            self.assertEqual(client.route("Fix a typo", candidates)["model"], "gpt-6-sol")
 
     def test_laya_never_requires_endpoint(self):
         self.assertIsNone(make_client("laya").url)

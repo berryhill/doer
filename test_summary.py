@@ -59,6 +59,8 @@ class SummaryTests(unittest.TestCase):
         class Client:
             def ask(self, state, questions):
                 return {key: True for key in questions}
+            def route(self, task, candidates):
+                return {"model": "gpt-6-sol", "choice": "gpt-6-sol", "confidence": 0.9, "reason": "selected"}
 
         def fake_hermes(prompt, model, workspace, **kwargs):
             if "observed_control_trace" in prompt:
@@ -84,7 +86,7 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(payload["report"], cli.format_report(payload, code))
         self.assertEqual(stderr.getvalue(), payload["report"] + "\n")
-        self.assertEqual(len(payload["trace"]), 5)
+        self.assertEqual(len(payload["trace"]), 6)
         self.assertIn("actual-sol", payload["report"])
         self.assertIn("subscription-included API charge", payload["report"])
         self.assertIn("known cost: $0.12; unknown cost: no", payload["report"])
@@ -93,6 +95,8 @@ class SummaryTests(unittest.TestCase):
         class Client:
             def ask(self, state, questions):
                 return {key: True for key in questions}
+            def route(self, task, candidates):
+                return {"model": "gpt-6-sol", "choice": "gpt-6-sol", "confidence": 0.9, "reason": "selected"}
 
         def fake_hermes(prompt, model, workspace, **kwargs):
             if "observed_control_trace" in prompt:
@@ -123,6 +127,8 @@ class SummaryTests(unittest.TestCase):
                 if "implementer_report" in state:
                     return {key: key != "works" for key in questions}
                 return {key: True for key in questions}
+            def route(self, task, candidates):
+                return {"model": "gpt-6-sol", "choice": "gpt-6-sol", "confidence": 0.9, "reason": "selected"}
 
         def fake_hermes(prompt, model, workspace, **kwargs):
             if "observed_control_trace" in prompt:

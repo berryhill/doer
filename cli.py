@@ -12,6 +12,9 @@ from pathlib import Path
 from decisions import make_client
 from doer import Gate, Result, Verdict, run
 
+MODEL_CANDIDATES = ("gpt-6-astra", "gpt-6-sol", "gpt-6-luna",
+                    "gpt-6-astra-900k", "gpt-6-sol-900k", "gpt-6-luna-900k")
+
 
 @dataclass(frozen=True)
 class HermesResponse:
@@ -167,7 +170,7 @@ def main() -> int:
                         help="Local Laya smoke only: inject one failed verification to exercise Luna repair")
     parser.add_argument("--profile", help="Optional Hermes profile override")
     parser.add_argument("--provider", help="Optional Hermes provider override")
-    parser.add_argument("--sol", help="Optional Sol model override")
+    parser.add_argument("--sol", help="Implementation model override (bypasses automatic routing)")
     parser.add_argument("--luna", default="gpt-6-luna",
                         help="Diagnosis and final-assessment model (default: gpt-6-luna)")
     args = parser.parse_args()
@@ -233,7 +236,19 @@ def main() -> int:
                          lambda: decisions.ask(state, questions))
         return Gate(**answers)
 
-    def implement(prompt):
+    def select(task):
+        def choose():
+            decision = ({"model": args.sol, "choice": args.sol, "confidence": None,
+                         "reason": "override"} if args.sol is not None else
+                        decisions.route(task, MODEL_CANDIDATES))
+            if decision["model"] not in MODEL_CANDIDATES and args.sol is None:
+                raise ValueError("decision model returned an unapproved implementation model")
+            return {"candidates": list(MODEL_CANDIDATES), **decision}
+        step = record("model_selection", decision_model if args.sol is None else "explicit_override",
+                      decision_provider if args.sol is None else "local", choose)
+        return step["model"]
+
+    def implement(prompt, model):
         text = ("One task in workspace " + workspace + ". Required artifact: " +
                 args.verify_file + ". Expected exact text (if set): " + repr(args.expect_text) +
                 ". Original scope and subsequent diagnosis are below. "
@@ -241,8 +256,8 @@ def main() -> int:
                 "push, deploy or write to external systems. Execute relevant checks, "
                 "then report the actual artifact paths and observed test output. "
                 "If blocked, report the blocker; never invent success.\n\n" + prompt)
-        return record("sol_implementation", args.sol, args.provider or "ambient",
-                      lambda: hermes(text, args.sol, workspace, profile=args.profile,
+        return record("sol_implementation", model, args.provider or "ambient",
+                      lambda: hermes(text, model, workspace, profile=args.profile,
                                      provider=args.provider), attempt_number() + 1).text
 
     def judge(task, work):
@@ -299,7 +314,8 @@ def main() -> int:
         return text
 
     try:
-        result = run(args.task, gate, implement, judge, diagnose, verify=check, complete=complete)
+        result = run(args.task, gate, implement, judge, diagnose, verify=check,
+                     complete=complete, select=select)
     except Exception as exc:
         result = Result("error", attempt_number(), f"{type(exc).__name__}: {exc}")
         try:

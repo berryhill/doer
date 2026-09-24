@@ -104,6 +104,8 @@ class ReportingTests(unittest.TestCase):
                 backend = "laya"
                 def ask(self, state, questions):
                     return {key: True for key in questions}
+                def route(self, task, candidates):
+                    return {"model": "gpt-6-sol", "choice": "gpt-6-sol", "confidence": 0.9, "reason": "selected"}
             calls = []
             def fake_hermes(prompt, model, workspace, **kwargs):
                 calls.append(model)
@@ -121,11 +123,11 @@ class ReportingTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertEqual(payload["status"], "verified")
             self.assertIn("completion offline", payload["completion_error"])
-            self.assertEqual(calls, [None, "gpt-6-luna"])
+            self.assertEqual(calls, ["gpt-6-sol", "gpt-6-luna"])
             self.assertEqual([step["kind"] for step in payload["trace"]],
-                             ["gate", "sol_implementation", "laya_judgment", "independent_verifier", "luna_completion"])
+                             ["gate", "model_selection", "sol_implementation", "laya_judgment", "independent_verifier", "luna_completion"])
             self.assertTrue(all(step["elapsed_seconds"] >= 0 for step in payload["trace"]))
-            self.assertEqual(payload["trace"][1]["tokens"]["input"], 4)
+            self.assertEqual(payload["trace"][2]["tokens"]["input"], 4)
             self.assertTrue(payload["unknown_cost"])
             self.assertEqual(payload["known_cost_usd"], 0)
             self.assertGreaterEqual(payload["total_elapsed_seconds"], 0)
@@ -135,6 +137,8 @@ class ReportingTests(unittest.TestCase):
             class Client:
                 def ask(self, state, questions):
                     return {key: True for key in questions}
+                def route(self, task, candidates):
+                    return {"model": "gpt-6-sol", "choice": "gpt-6-sol", "confidence": 0.9, "reason": "selected"}
             sentence = "The result.txt artifact passed its narrow file check, but quality remains uncertain."
             def fake_hermes(prompt, model, workspace, **kwargs):
                 if "observed_control_trace" in prompt:
@@ -156,6 +160,8 @@ class ReportingTests(unittest.TestCase):
             class Client:
                 def ask(self, state, questions):
                     return {key: True for key in questions}
+                def route(self, task, candidates):
+                    return {"model": "gpt-6-sol", "choice": "gpt-6-sol", "confidence": 0.9, "reason": "selected"}
             def fake_hermes(prompt, model, workspace, **kwargs):
                 if "observed_control_trace" in prompt:
                     raise RuntimeError("completion offline")
@@ -177,6 +183,8 @@ class ReportingTests(unittest.TestCase):
             class Client:
                 def ask(self, state, questions):
                     return {key: True for key in questions}
+                def route(self, task, candidates):
+                    return {"model": "gpt-6-sol", "choice": "gpt-6-sol", "confidence": 0.9, "reason": "selected"}
             def fake_hermes(prompt, model, workspace, **kwargs):
                 if "One task in workspace" in prompt:
                     raise RuntimeError("Sol timed out")
@@ -193,8 +201,8 @@ class ReportingTests(unittest.TestCase):
             self.assertIn("Sol timed out", payload["message"])
             self.assertEqual(payload["completion"], "Low confidence: implementation failed.")
             self.assertEqual([step["kind"] for step in payload["trace"]],
-                             ["gate", "sol_implementation", "luna_completion"])
-            self.assertIn("Sol timed out", payload["trace"][1]["error"])
+                             ["gate", "model_selection", "sol_implementation", "luna_completion"])
+            self.assertIn("Sol timed out", payload["trace"][2]["error"])
 
 
 if __name__ == "__main__":
