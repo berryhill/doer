@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import time
@@ -254,7 +255,7 @@ def main() -> int:
                           lambda: hermes(prompt, args.luna, workspace, profile=args.profile,
                                          provider=args.provider))
         text = response.text.strip()
-        if not text or len([s for s in text.replace("!", ".").replace("?", ".").split(".") if s.strip()]) != 1:
+        if not text or text[-1] not in ".!?" or len(re.split(r"(?<=[.!?])\s+(?=\S)", text)) != 1:
             raise ValueError("Luna completion must be one sentence")
         return text
 

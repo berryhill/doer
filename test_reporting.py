@@ -130,6 +130,27 @@ class ReportingTests(unittest.TestCase):
             self.assertEqual(payload["known_cost_usd"], 0)
             self.assertGreaterEqual(payload["total_elapsed_seconds"], 0)
 
+    def test_completion_accepts_single_sentence_with_filename_period(self):
+        with tempfile.TemporaryDirectory() as d:
+            class Client:
+                def ask(self, state, questions):
+                    return {key: True for key in questions}
+            sentence = "The result.txt artifact passed its narrow file check, but quality remains uncertain."
+            def fake_hermes(prompt, model, workspace, **kwargs):
+                if "observed_control_trace" in prompt:
+                    return cli.HermesResponse(sentence, "sid-luna", {"input": 1, "output": 1})
+                (Path(workspace) / "result.txt").write_text("hello")
+                return cli.HermesResponse("created result.txt", "sid-sol", {"input": 1, "output": 1})
+            with patch("cli.make_client", return_value=Client()), patch("cli.hermes", side_effect=fake_hermes), \
+                 patch("cli.session_cost", return_value={"usd": 0, "cost_status": "included", "cost_source": "none"}), \
+                 patch("sys.argv", ["doer", "create result.txt", "--workspace", d, "--verify-file", "result.txt", "--expect-text", "hello", "--execute"]), \
+                 patch("builtins.print") as output:
+                code = cli.main()
+            payload = json.loads(output.call_args.args[0])
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["completion"], sentence)
+            self.assertIsNone(payload["completion_error"])
+
     def test_incomplete_keeps_nonzero_exit_when_completion_fails(self):
         with tempfile.TemporaryDirectory() as d:
             class Client:
