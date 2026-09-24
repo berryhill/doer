@@ -16,8 +16,8 @@ class Router:
         with Path(os.environ["FAKE_LAYA_LOG"]).open("a") as f: f.write("load\\n")
     def predict(self, state, questions):
         with Path(os.environ["FAKE_LAYA_LOG"]).open("a") as f: f.write("predict " + ",".join(questions) + "\\n")
-        if "implementation_model" in questions:
-            return {"answers": {"implementation_model": {"choice": "gpt-6-sol", "answer_confidence": 0.99}}}
+        if "implementation_family" in questions:
+            return {"answers": {"implementation_family": {"choice": "gpt-6-sol", "answer_confidence": 0.99}}}
         return {"answers": {key: {"choice": "yes", "answer_confidence": 0.99}
                             for key in questions}}
 '''
@@ -101,12 +101,11 @@ class IntegrationTests(unittest.TestCase):
                 self.assertEqual(args[args.index("--in") + 1], str(work))
                 self.assertNotIn("--yolo", args)
             self.assertEqual(laya_log.read_text().splitlines()[0], "load")
-            if "--sol" in overrides:
-                self.assertEqual(len(laya_log.read_text().splitlines()), 4)
-                self.assertEqual(result["trace"][1]["evidence"]["reason"], "override")
-            else:
-                self.assertEqual(len(laya_log.read_text().splitlines()), 5)
-                self.assertEqual(result["trace"][1]["evidence"]["model"], "gpt-6-sol")
+            self.assertEqual(len(laya_log.read_text().splitlines()),
+                             5 if "laya" in overrides else 4)
+            self.assertEqual(result["trace"][1]["evidence"]["reason"],
+                             "explicit_override" if "--sol" in overrides else
+                             "laya_choice" if "laya" in overrides else "stable_default")
             self.assertEqual([s["model"] for s in result["trace"] if s["kind"] == "sol_implementation"],
                              [overrides[overrides.index("--sol") + 1] if "--sol" in overrides else "gpt-6-sol"] * 2)
             return calls
@@ -122,6 +121,12 @@ class IntegrationTests(unittest.TestCase):
                 self.assertEqual(call["args"][call["args"].index("-m") + 1], "gpt-6-luna")
             else:
                 self.assertEqual(call["args"][call["args"].index("-m") + 1], "gpt-6-sol")
+
+    def test_opt_in_family_selection_runs_once_before_retries(self):
+        calls = self.run_fake(("--routing-policy", "laya", "--available-model", "gpt-6-sol",
+                               "--available-model", "gpt-6-luna"))
+        self.assertEqual([call["args"][call["args"].index("-m") + 1] for call in calls],
+                         ["gpt-6-sol", "gpt-6-luna", "gpt-6-sol", "gpt-6-luna"])
 
     def test_luna_role_uses_luna_model_without_explicit_override(self):
         calls = self.run_fake()

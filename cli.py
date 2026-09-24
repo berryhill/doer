@@ -11,9 +11,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from decisions import make_client
 from doer import Gate, Result, Verdict, run
-
-MODEL_CANDIDATES = ("gpt-6-astra", "gpt-6-sol", "gpt-6-luna",
-                    "gpt-6-astra-900k", "gpt-6-sol-900k", "gpt-6-luna-900k")
+from routing import CANDIDATES as MODEL_CANDIDATES, RoutingError, choose_model
 
 
 @dataclass(frozen=True)
@@ -171,6 +169,12 @@ def main() -> int:
     parser.add_argument("--profile", help="Optional Hermes profile override")
     parser.add_argument("--provider", help="Optional Hermes provider override")
     parser.add_argument("--sol", help="Implementation model override (bypasses automatic routing)")
+    parser.add_argument("--routing-policy", choices=("sol", "rules", "laya"), default="sol",
+                        help="Implementation routing (default: stable always-Sol; Laya is experimental)")
+    parser.add_argument("--available-model", action="append", choices=MODEL_CANDIDATES,
+                        help="Repeat for each candidate confirmed on the active provider/profile")
+    parser.add_argument("--observed-input-tokens", type=int,
+                        help="Operator-reported measured input tokens (not verified by Doer)")
     parser.add_argument("--luna", default="gpt-6-luna",
                         help="Diagnosis and final-assessment model (default: gpt-6-luna)")
     args = parser.parse_args()
@@ -181,6 +185,8 @@ def main() -> int:
         parser.error("--execute requires --verify-file for an independent completion check")
     if args.test_retry_once and args.backend != "laya":
         parser.error("--test-retry-once is only available with local Laya")
+    if args.sol is None and args.routing_policy != "sol" and not args.available_model:
+        parser.error("experimental routing requires --available-model confirmed on this account")
     try:
         decisions = make_client(args.backend)
     except ValueError as exc:
@@ -213,6 +219,8 @@ def main() -> int:
             return value
         except Exception as exc:
             step["error"] = f"{type(exc).__name__}: {exc}"
+            if isinstance(exc, RoutingError):
+                step["evidence"] = {"stages": exc.stages, "reason": str(exc)}
             if provider == "local":
                 step.update(cost_status="local_no_billed_api", cost_source="local")
             raise
@@ -236,26 +244,33 @@ def main() -> int:
                          lambda: decisions.ask(state, questions))
         return Gate(**answers)
 
-    def select(task):
-        def choose():
-            decision = ({"model": args.sol, "choice": args.sol, "confidence": None,
-                         "reason": "override"} if args.sol is not None else
-                        decisions.route(task, MODEL_CANDIDATES))
-            if decision["model"] not in MODEL_CANDIDATES and args.sol is None:
-                raise ValueError("decision model returned an unapproved implementation model")
-            return {"candidates": list(MODEL_CANDIDATES), **decision}
-        step = record("model_selection", decision_model if args.sol is None else "explicit_override",
-                      decision_provider if args.sol is None else "local", choose)
-        return step["model"]
-
-    def implement(prompt, model):
-        text = ("One task in workspace " + workspace + ". Required artifact: " +
+    def implementation_text(prompt):
+        return ("One task in workspace " + workspace + ". Required artifact: " +
                 args.verify_file + ". Expected exact text (if set): " + repr(args.expect_text) +
                 ". Original scope and subsequent diagnosis are below. "
                 "Work only inside the workspace. Do not commit, "
                 "push, deploy or write to external systems. Execute relevant checks, "
                 "then report the actual artifact paths and observed test output. "
                 "If blocked, report the blocker; never invent success.\n\n" + prompt)
+
+    def select(task):
+        def choose():
+            return choose_model(task, args.available_model or ("gpt-6-sol",),
+                                len(implementation_text(task).encode("utf-8")),
+                                decisions.choose_family if args.routing_policy == "laya" and args.sol is None
+                                else lambda *_: None,
+                                override=args.sol, policy=args.routing_policy,
+                                observed_input_tokens=args.observed_input_tokens,
+                                availability_source=("operator_confirmed_not_rechecked" if args.available_model
+                                                     else "default_unverified"),
+                                min_confidence=0.8 if args.backend == "jev" else 0.6)
+        step = record("model_selection", decision_model if args.routing_policy == "laya" and args.sol is None
+                      else "deterministic", decision_provider if args.routing_policy == "laya" and args.sol is None
+                      else "local", choose)
+        return step["model"]
+
+    def implement(prompt, model):
+        text = implementation_text(prompt)
         return record("sol_implementation", model, args.provider or "ambient",
                       lambda: hermes(text, model, workspace, profile=args.profile,
                                      provider=args.provider), attempt_number() + 1).text
