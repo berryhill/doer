@@ -105,11 +105,20 @@ class IntegrationTests(unittest.TestCase):
     def test_reported_success_does_not_pass_until_actual_artifact_exists(self):
         calls = self.run_fake()
         for call in calls:
-            self.assertEqual(call["args"][:6], ["chat", "--query-file", "-", "--format", "stream-json", "--source"])
+            self.assertEqual(call["args"][:5], ["chat", "--query-file", "-", "--format", "stream-json"])
             self.assertNotIn("-p", call["args"])
             self.assertNotIn("--profile", call["args"])
             self.assertNotIn("--provider", call["args"])
-            self.assertNotIn("-m", call["args"])
+            if call["role"] == "luna":
+                self.assertEqual(call["args"][call["args"].index("-m") + 1], "gpt-6-luna")
+            else:
+                self.assertNotIn("-m", call["args"])
+
+    def test_luna_role_uses_luna_model_without_explicit_override(self):
+        calls = self.run_fake()
+        self.assertEqual([call["args"][call["args"].index("-m") + 1]
+                          if "-m" in call["args"] else None for call in calls],
+                         [None, "gpt-6-luna", None, "gpt-6-luna"])
 
     def test_explicit_overrides_reach_both_separate_chats(self):
         calls = self.run_fake(("--profile", "alt", "--provider", "other",
@@ -130,10 +139,15 @@ class IntegrationTests(unittest.TestCase):
                 calls = self.run_fake((overrides, value))
                 for call in calls:
                     args = call["args"]
-                    if overrides in ("--sol", "--luna") and call["role"] != overrides[2:]:
-                        self.assertNotIn("-m", args)
-                    else:
+                    if overrides in ("--profile", "--provider"):
                         self.assertEqual(args[args.index(option) + 1], value)
+                    if call["role"] == "luna":
+                        self.assertEqual(args[args.index("-m") + 1],
+                                         value if overrides == "--luna" else "gpt-6-luna")
+                    elif overrides == "--sol":
+                        self.assertEqual(args[args.index("-m") + 1], value)
+                    else:
+                        self.assertNotIn("-m", args)
                     if overrides != "--profile":
                         self.assertNotIn("-p", args)
                     if overrides != "--provider":

@@ -121,7 +121,7 @@ class ReportingTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertEqual(payload["status"], "verified")
             self.assertIn("completion offline", payload["completion_error"])
-            self.assertEqual(calls, [None, None])
+            self.assertEqual(calls, [None, "gpt-6-luna"])
             self.assertEqual([step["kind"] for step in payload["trace"]],
                              ["gate", "sol_implementation", "laya_judgment", "independent_verifier", "luna_completion"])
             self.assertTrue(all(step["elapsed_seconds"] >= 0 for step in payload["trace"]))

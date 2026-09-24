@@ -128,7 +128,8 @@ def main() -> int:
     parser.add_argument("--profile", help="Optional Hermes profile override")
     parser.add_argument("--provider", help="Optional Hermes provider override")
     parser.add_argument("--sol", help="Optional Sol model override")
-    parser.add_argument("--luna", help="Optional Luna model override")
+    parser.add_argument("--luna", default="gpt-6-luna",
+                        help="Diagnosis and final-assessment model (default: gpt-6-luna)")
     args = parser.parse_args()
     if not args.execute:
         print(f"Dry run ({args.backend}): pass --execute to send this task to the decision model and Hermes. No changes made.")
