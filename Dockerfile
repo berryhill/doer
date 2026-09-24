@@ -8,7 +8,7 @@ RUN mkdir -p /build-tmp && apt-get update && apt-get install -y --no-install-rec
 FROM base AS laya
 WORKDIR /opt/laya
 COPY pyproject.toml uv.lock ./
-RUN UV_PROJECT_ENVIRONMENT=/opt/laya-venv uv sync --frozen --no-dev --no-progress
+RUN UV_PROJECT_ENVIRONMENT=/opt/laya-venv uv sync --frozen --no-dev --no-progress --no-install-project
 RUN /opt/laya-venv/bin/python -c "from laya import Router; import torch; assert torch.version.cuda is None"
 
 FROM base AS hermes
@@ -22,7 +22,9 @@ COPY --from=laya /opt/laya-venv /opt/laya-venv
 # Hermes uses an editable installation; retain its source at the same path.
 COPY --from=hermes /opt/hermes-agent /opt/hermes-agent
 WORKDIR /app
-COPY cli.py doer.py decisions.py routing.py service.py worker.py ./
+COPY service.py worker.py pyproject.toml README.md ./
+COPY src/ ./src/
+RUN uv pip install --python /opt/laya-venv/bin/python --no-deps .
 COPY doer-loop/SKILL.md /opt/doer-skills/doer-loop/SKILL.md
 COPY scripts/bootstrap-runtime.sh /usr/local/bin/doer-bootstrap
 RUN chmod 755 /usr/local/bin/doer-bootstrap && ln -s /opt/hermes-agent/.venv/bin/hermes /usr/local/bin/hermes && useradd --uid 10001 --create-home --home-dir /runtime doer && mkdir -p /data /runtime/tmp /runtime/hermes/skills && cp -r /opt/doer-skills/doer-loop /runtime/hermes/skills/ && chown -R doer:doer /runtime /data && chmod -R a-w /app

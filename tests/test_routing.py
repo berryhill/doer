@@ -1,6 +1,6 @@
 import unittest
 
-from routing import choose_model, CANDIDATES
+from doer_loop.routing import choose_model, CANDIDATES
 
 
 class RoutingTests(unittest.TestCase):

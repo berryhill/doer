@@ -3,10 +3,10 @@
 !Dockerfile
 !pyproject.toml
 !uv.lock
-!cli.py
-!doer.py
-!decisions.py
-!routing.py
+!README.md
+!src/
+!src/doer_loop/
+!src/doer_loop/*.py
 !service.py
 !worker.py
 !scripts/

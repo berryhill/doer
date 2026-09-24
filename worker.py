@@ -142,9 +142,9 @@ class SubprocessRunner:
                  max_output=MAX_OUTPUT, max_workspace_files=MAX_WORKSPACE_FILES,
                  max_workspace_bytes=MAX_WORKSPACE_BYTES, term_grace=0.2):
         # Overrides are dependency-injection seams for synthetic subprocess tests.
-        # Production always uses this directory's real cli.py and interpreter.
+        # Production uses the installed doer_loop.cli module and this interpreter.
         self.config = config
-        self.controller_path = Path(controller_path or Path(__file__).with_name('cli.py')).absolute()
+        self.controller_path = Path(controller_path).absolute() if controller_path else None
         self.executable = executable or sys.executable
         self.max_output = max_output
         self.max_workspace_files = max_workspace_files
@@ -208,7 +208,8 @@ class SubprocessRunner:
                               deadline, self._cancelled):
             return 'failed', None
         c = self.config
-        args = [self.executable, str(self.controller_path), '--workspace', str(workspace),
+        controller = [str(self.controller_path)] if self.controller_path else ['-m', 'doer_loop.cli']
+        args = [self.executable, *controller, '--workspace', str(workspace),
                 '--verify-file=' + relative, '--profile=' + c.profile,
                 '--provider=' + c.provider, '--sol=' + c.model, '--luna=' + c.luna, '--execute']
         if 'expect_text' in body:

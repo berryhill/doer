@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-ROOT = Path(__file__).parent
+ROOT = Path(__file__).parent.parent
 
 FAKE_LAYA = '''import os
 from pathlib import Path
@@ -18,6 +18,13 @@ class Router:
         with Path(os.environ["FAKE_LAYA_LOG"]).open("a") as f: f.write("predict " + ",".join(questions) + "\\n")
         if "implementation_family" in questions:
             return {"answers": {"implementation_family": {"choice": "gpt-6-sol", "answer_confidence": 0.99}}}
+        if "works" in questions and os.environ.get("FAKE_BAD_JUDGMENT") == "1":
+            count = sum("works" in line for line in
+                        Path(os.environ["FAKE_LAYA_LOG"]).read_text().splitlines()
+                        if line.startswith("predict "))
+            if count == 1:
+                return {"answers": {key: {"choice": "no" if key == "works" else "yes",
+                                          "answer_confidence": 0.99} for key in questions}}
         return {"answers": {key: {"choice": "yes", "answer_confidence": 0.99}
                             for key in questions}}
 '''
@@ -41,7 +48,7 @@ if role == "luna":
             "Artifact missing; create result.txt with the expected content.")
 else:
     count = sum(json.loads(line)["role"] == "sol" for line in log.read_text().splitlines())
-    if count == 2:
+    if count == 2 or os.environ.get("FAKE_FIRST_FILE") == "1":
         (Path(args[args.index("--in") + 1]) / "result.txt").write_text("hello\\n")
     text = "Implemented; test reports success."
 model = args[args.index("-m") + 1] if "-m" in args else "ambient-model"
@@ -66,7 +73,7 @@ class IntegrationTests(unittest.TestCase):
             self.assertEqual(json.loads(completed.stdout)["status"], "verified")
             self.assertEqual((work / "result.txt").read_text().strip(), "hello")
 
-    def run_fake(self, overrides=()):
+    def run_fake(self, overrides=(), *, first_file=False, bad_judgment=False):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             bin_dir, work = root / "bin", root / "work"
@@ -78,8 +85,11 @@ class IntegrationTests(unittest.TestCase):
             fake.chmod(0o755)
             log, laya_log = root / "invocations.log", root / "laya.log"
             env = {**os.environ, "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"],
-                   "PYTHONPATH": str(bin_dir), "FAKE_LOG": str(log), "FAKE_LAYA_LOG": str(laya_log)}
-            completed = subprocess.run([sys.executable, str(ROOT / "cli.py"),
+                   "PYTHONPATH": str(ROOT / "src") + os.pathsep + str(bin_dir),
+                   "FAKE_LOG": str(log), "FAKE_LAYA_LOG": str(laya_log),
+                   "FAKE_FIRST_FILE": "1" if first_file else "0",
+                   "FAKE_BAD_JUDGMENT": "1" if bad_judgment else "0"}
+            completed = subprocess.run([sys.executable, "-m", "doer_loop.cli",
                                         "Create result.txt containing hello", "--workspace", str(work),
                                         "--verify-file", "result.txt", "--expect-text", "hello", "--execute",
                                         *overrides],
@@ -108,6 +118,7 @@ class IntegrationTests(unittest.TestCase):
                              "laya_choice" if "laya" in overrides else "stable_default")
             self.assertEqual([s["model"] for s in result["trace"] if s["kind"] == "sol_implementation"],
                              [overrides[overrides.index("--sol") + 1] if "--sol" in overrides else "gpt-6-sol"] * 2)
+            self.last_result = result
             return calls
 
     def test_reported_success_does_not_pass_until_actual_artifact_exists(self):
@@ -121,6 +132,31 @@ class IntegrationTests(unittest.TestCase):
                 self.assertEqual(call["args"][call["args"].index("-m") + 1], "gpt-6-luna")
             else:
                 self.assertEqual(call["args"][call["args"].index("-m") + 1], "gpt-6-sol")
+
+    def test_retry_prompt_reports_positive_judgment_but_failed_file_check(self):
+        calls = self.run_fake()
+        prompt = calls[2]["prompt"]
+        self.assertIn("Original task: Create result.txt containing hello", prompt)
+        self.assertIn("Required artifact: result.txt; expected exact text: 'hello'", prompt)
+        self.assertIn("Observed result: result.txt is missing", prompt)
+        self.assertIn("Laya judgment: passed all reported checks", prompt)
+        self.assertIn("independent file check: failed (result.txt is missing)", prompt)
+        self.assertIn("Keep: No independently verified working behavior", prompt)
+        self.assertIn("Next attempt: Repair only these failures. Inspect the current workspace first", prompt)
+        self.assertIn("Run the relevant checks and report their real output", prompt)
+        self.assertIn("Do not invent evidence or change unrelated files", prompt)
+        first_check = next(s for s in self.last_result["trace"] if s["kind"] == "independent_verifier")
+        self.assertEqual(first_check["evidence"], {"passed": False,
+                                                     "observed": "result.txt is missing",
+                                                     "failure": "result.txt is missing"})
+
+    def test_retry_prompt_preserves_verified_file_when_judgment_fails(self):
+        calls = self.run_fake(first_file=True, bad_judgment=True)
+        prompt = calls[2]["prompt"]
+        self.assertIn("Laya judgment: failed works", prompt)
+        self.assertIn("independent file check: passed", prompt)
+        self.assertIn("Keep: Independent file check passed: result.txt exists", prompt)
+        self.assertIn("'hello\\n'", prompt)
 
     def test_opt_in_family_selection_runs_once_before_retries(self):
         calls = self.run_fake(("--routing-policy", "laya", "--available-model", "gpt-6-sol",

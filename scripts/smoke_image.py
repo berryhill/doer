@@ -26,6 +26,9 @@ try:
         return subprocess.run(['docker', 'exec', name, *args], capture_output=True, text=True, check=True, timeout=90).stdout
     help_text = execute('/usr/local/bin/hermes', 'chat', '--help')
     assert all(flag in help_text for flag in ('--query-file', '--format', '--source', '--in', '--max-turns', '--run-budget'))
+    assert '--verify-file' in execute('/opt/laya-venv/bin/python', '-m', 'doer_loop.cli', '--help')
+    assert '--verify-file' in execute('/opt/laya-venv/bin/doer', '--help')
+    print('installed Doer module and console entrypoint: PASS')
     print(execute('/opt/laya-venv/bin/python', '-c', "import os,torch; from laya import Router; assert os.getuid()==10001; assert torch.version.cuda is None; print('non-root + CPU Laya imports: PASS')").strip())
     print(execute('/opt/laya-venv/bin/python', '-c', '''
 import base64,json,time,urllib.request,urllib.error

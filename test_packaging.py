@@ -8,7 +8,7 @@ import types
 import unittest
 from unittest.mock import patch, Mock
 
-import decisions
+from doer_loop import decisions
 
 ROOT = Path(__file__).resolve().parent
 
@@ -17,7 +17,7 @@ class PackagingTests(unittest.TestCase):
     def test_cpu_lock_matches_manifest(self):
         manifest = tomllib.loads((ROOT / 'pyproject.toml').read_text())
         lock = tomllib.loads((ROOT / 'uv.lock').read_text())
-        self.assertFalse(manifest['tool']['uv']['package'])
+        self.assertEqual(manifest['project']['scripts']['doer'], 'doer_loop.cli:main')
         packages = {p['name']: p for p in lock['package']}
         self.assertEqual(packages['laya']['version'], '0.3.20')
         self.assertEqual(packages['torch']['version'], '2.4.1+cpu')
@@ -29,7 +29,7 @@ class PackagingTests(unittest.TestCase):
         for line in text.splitlines():
             if line.startswith('COPY ') and '--from=' not in line:
                 for source in line.split()[1:-1]:
-                    self.assertTrue((ROOT / source).is_file(), source)
+                    self.assertTrue((ROOT / source).exists(), source)
         self.assertIn('USER 10001:10001', text)
         self.assertIn('uv sync --frozen --no-dev', text)
         self.assertIn('749220ef0007f8d87bd1531f1c24b0fe93816385', text)

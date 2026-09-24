@@ -1,7 +1,12 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
 [project]
-name = "doer-service"
+name = "doer-loop"
 version = "0.1.0"
-description = "CPU Laya runtime for the trusted-customer Doer service"
+description = "Bounded one-task agent loop with typed decisions and independent verification"
+readme = "README.md"
 requires-python = "==3.12.*"
 dependencies = [
   "laya==0.3.20",
@@ -12,11 +17,14 @@ dependencies = [
   "numpy==2.0.2",
 ]
 
+[project.scripts]
+doer = "doer_loop.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [dependency-groups]
 dev = ["pytest==8.4.2"]
-
-[tool.uv]
-package = false
 
 [[tool.uv.index]]
 name = "pytorch-cpu"

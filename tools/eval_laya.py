@@ -4,7 +4,7 @@ This is a diagnostic sample, not a calibration set or benchmark.
 """
 import json
 from laya import Router
-from decisions import YES_NO
+from doer_loop.decisions import YES_NO
 
 
 def classify_laya(answer):

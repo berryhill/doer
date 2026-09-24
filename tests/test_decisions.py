@@ -3,7 +3,7 @@ import sys
 import types
 import unittest
 from unittest.mock import patch
-from decisions import DecisionClient, make_client
+from doer_loop.decisions import DecisionClient, make_client
 
 
 class Response:
@@ -56,7 +56,7 @@ class DecisionsTests(unittest.TestCase):
                     "choice": "yes", "confidence": 0.2, "answer_confidence": 0.76}}}
         client = make_client()
         with patch.dict(sys.modules, {"laya": types.SimpleNamespace(Router=FakeRouter)}), \
-             patch("decisions.urllib.request.urlopen", side_effect=AssertionError("HTTP used")):
+             patch("doer_loop.decisions.urllib.request.urlopen", side_effect=AssertionError("HTTP used")):
             self.assertEqual(client.ask("task", {"ready": "Is it ready?"}), {"ready": True})
             self.assertEqual(client.ask("task2", {"ready": "Is it ready?"}), {"ready": True})
         self.assertEqual(len(instances), 1)
@@ -68,7 +68,7 @@ class DecisionsTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "TYPESAFE_API_KEY"):
                 make_client("jev")
         client = DecisionClient("jev", "https://api.typesafe.ai/v1/systemone", "secret")
-        with patch("decisions.urllib.request.urlopen", return_value=Response({"answers": {
+        with patch("doer_loop.decisions.urllib.request.urlopen", return_value=Response({"answers": {
             "ready": {"choice": "yes", "confidence": 0.9}}})) as send:
             self.assertEqual(client.ask("task", {"ready": "Is it ready?"}), {"ready": True})
         req = send.call_args.args[0]
@@ -78,7 +78,7 @@ class DecisionsTests(unittest.TestCase):
     def test_jev_family_choice_uses_its_own_confidence_and_same_allowed_choices(self):
         client = DecisionClient("jev", "https://api.typesafe.ai/v1/systemone", "secret")
         candidates = ("gpt-6-astra", "gpt-6-sol", "gpt-6-luna")
-        with patch("decisions.urllib.request.urlopen", return_value=Response({"answers": {
+        with patch("doer_loop.decisions.urllib.request.urlopen", return_value=Response({"answers": {
             "implementation_family": {"choice": "gpt-6-luna", "confidence": 0.85}}})) as send:
             result = client.choose_family("Fix a typo", candidates)
         self.assertEqual(result["choice"], "gpt-6-luna")
