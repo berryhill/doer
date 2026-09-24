@@ -26,9 +26,22 @@ Optional overrides: `--profile NAME` selects a Hermes profile, `--provider NAME`
 
 The optional `--backend jev` uses the official TypeSafe HTTPS API instead of local Laya and requires `TYPESAFE_API_KEY` configured securely outside this repository. For example, append `--backend jev` to the live command above once credentials are available. Do not paste credentials into chat or commit them here. No live Jev call is documented as tested.
 
+## Agent Skill
+
+The portable Agent Skill is in [`doer-loop/SKILL.md`](doer-loop/SKILL.md). A clone contains the file but does not automatically install this root-level skill into Hermes. Preview and install it from the public GitHub repository:
+
+```sh
+hermes skills inspect berryhill/doer/doer-loop
+hermes skills install berryhill/doer/doer-loop
+```
+
+Review the security scan before confirming installation. If you already have a user-local `doer-loop` skill, inspect it before replacing anything; a clone alone does not replace your local copy. You can validate the source with `skills-ref validate ./doer-loop`. The skill describes safe invocation and independent verification; it does not install Doer, Laya, or Hermes model access.
+
 ## Results and retries
 
-The initial gate checks whether the task and expected result are specified; an unclear contract yields `needs_input` without an implementation attempt. After each Sol attempt, the decision model judges Sol's report for completion, scope drift, fulfillment, working evidence, and reasonable practices; the separate file check must also pass for `verified`. Failures feed Luna's diagnosis into the next Sol attempt. Exhausting three attempts yields `incomplete`, not success. The CLI prints a JSON result and exits nonzero unless its status is `verified`.
+The initial gate checks whether the task and expected result are specified; an unclear contract yields `needs_input` without an implementation attempt. After each Sol attempt, the decision model judges Sol's report for completion, scope drift, fulfillment, working evidence, and reasonable practices; the separate file check must also pass for `verified`. Failures feed Luna's diagnosis into the next Sol attempt. Exhausting three attempts yields `incomplete`, not success. At the end of the run, Luna assesses completion quality and confidence in one sentence based on the observed verdicts and verification evidence. The JSON `completion` contains that sentence for `verified`, `incomplete`, or `needs_input`; a model/controller exception produces `error` and still attempts the Luna report. If Luna fails, `completion_error` explains why without changing the outcome or exit status. The CLI prints JSON and exits nonzero unless its status is `verified`.
+
+The JSON `trace` lists gate, Sol implementation, decision judgment, file verification, Luna diagnosis (if needed), and Luna completion steps in execution order. Each step records `kind`, `attempt`, elapsed wall-clock seconds, model, provider, evidence/error, and for Hermes calls a session ID and token counts from stream-json. `usd`, `cost_status` and `cost_source` reflect the primary model usage row for the session in the read-only Hermes profile database (`--profile` when explicitly supplied; otherwise the default profile). Provider is labeled `ambient` if not explicitly selected, rather than guessing. Costs can be actual, estimated, subscription-included, or unknown; unrelated automatic tasks such as title generation are not attributed to an individual step. Local Laya and the file verifier have no billed API charge, but CPU, electricity, downloads, and subscription fees are not priced. `known_cost_usd` is a subtotal of priced model steps; `unknown_cost` is true if a remote step cannot be priced. `total_elapsed_seconds` covers the controller lifecycle. Traces can contain task text and artifact contents; handle the JSON accordingly.
 
 For a retry-path smoke test only, `--test-retry-once` with local Laya forces the first independent check to fail, then uses the real verifier. This deliberately exercises Luna and a second attempt; the injected failure is not evidence of a defect. Do not use it for real tasks.
 
