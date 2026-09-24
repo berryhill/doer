@@ -1,0 +1,27 @@
+[project]
+name = "doer-service"
+version = "0.1.0"
+description = "CPU Laya runtime for the trusted-customer Doer service"
+requires-python = "==3.12.*"
+dependencies = [
+  "laya==0.3.20",
+  "torch==2.4.1+cpu",
+  "transformers==4.48.3",
+  "safetensors==0.5.3",
+  "huggingface-hub==0.26.5",
+  "numpy==2.0.2",
+]
+
+[dependency-groups]
+dev = ["pytest==8.4.2"]
+
+[tool.uv]
+package = false
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }

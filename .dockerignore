@@ -1,0 +1,15 @@
+# An allowlist keeps profiles, credentials, state and scratch out of build context.
+**
+!Dockerfile
+!pyproject.toml
+!uv.lock
+!cli.py
+!doer.py
+!decisions.py
+!routing.py
+!service.py
+!worker.py
+!scripts/
+!scripts/bootstrap-runtime.sh
+!doer-loop/
+!doer-loop/SKILL.md

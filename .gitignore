@@ -5,3 +5,7 @@ __pycache__/
 .env.*
 .pytest_cache/
 .coverage
+.scratch/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm

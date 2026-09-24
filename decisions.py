@@ -2,6 +2,7 @@
 from dataclasses import dataclass, field
 import json
 import os
+from pathlib import Path
 import urllib.request
 
 JEV_URL = "https://api.typesafe.ai/v1/systemone"
@@ -9,6 +10,24 @@ YES_NO = {"type": "choice", "criteria": {
     "yes": "yes, supported by the supplied state",
     "no": "no or insufficient evidence",
 }}
+
+
+def make_router():
+    """Optional staged checkpoint for service images; preserve ambient CLI behavior."""
+    from laya import Router
+    model_dir = os.environ.get("DOER_LAYA_MODEL_DIR")
+    if not model_dir:
+        return Router()
+    path = Path(model_dir)
+    if not path.is_absolute() or not (path / "model.safetensors").is_file():
+        raise ValueError("DOER_LAYA_MODEL_DIR must contain a staged local checkpoint")
+    return Router(models={"english": str(path)}, device="cpu", max_loaded=1, preload=False)
+
+
+def router_predict(router, state, schema):
+    if os.environ.get("DOER_LAYA_MODEL_DIR"):
+        return router.predict(state, schema, model="english")
+    return router.predict(state, schema)
 
 
 @dataclass(frozen=True)
@@ -35,9 +54,8 @@ class DecisionClient:
                   for name, instruction in questions.items()}
         if self.backend == "laya":
             if self._router is None:
-                from laya import Router
-                object.__setattr__(self, "_router", Router())
-            answers = self._router.predict(state, schema)["answers"]
+                object.__setattr__(self, "_router", make_router())
+            answers = router_predict(self._router, state, schema)["answers"]
             score, threshold = "answer_confidence", 0.6
         else:
             body = {"state": state, "model": "jev-latest", "questions": schema}
@@ -67,9 +85,8 @@ class DecisionClient:
         state = json.dumps({"task": task, "eligible_families": families})
         if self.backend == "laya":
             if self._router is None:
-                from laya import Router
-                object.__setattr__(self, "_router", Router())
-            answer = self._router.predict(state, schema).get("answers", {}).get("implementation_family", {})
+                object.__setattr__(self, "_router", make_router())
+            answer = router_predict(self._router, state, schema).get("answers", {}).get("implementation_family", {})
             score = "answer_confidence"
         else:
             req = urllib.request.Request(self.url, data=json.dumps({

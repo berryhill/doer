@@ -1,5 +1,14 @@
 # Doer
 
+## Paid HTTP service
+
+The optional [paid service](docs/service.md) exposes Doer through an x402 v2
+endpoint with durable jobs, private results, intent-bound signed nonces, bounded
+execution and a single worker. See [runtime packaging](docs/runtime.md) for the
+pinned Hermes/Laya image and setup. It is a trusted-customer prototype, not a
+multi-tenant sandbox. Container/source verification is separate from live model
+access, Cynder hosting eligibility and an approved on-chain paid invocation.
+
 Doer runs one task per invocation. It asks a typed decision model whether the requested outcome is concrete and observable, selects an implementation model once, judges the implementation report, and independently checks a user-selected file. On a failed check, Luna diagnoses the failure and the same selected model retries with the original request preserved. It makes at most three implementation attempts; reaching the limit is not success.
 
 ## Run one task
