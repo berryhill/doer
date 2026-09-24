@@ -11,13 +11,21 @@ from decisions import make_client
 from doer import Gate, Result, Verdict, run
 
 
+@dataclass(frozen=True)
+class HermesResponse:
+    text: str
+    session_id: str
+    tokens: dict
+    model: str | None = None
+
+
 def hermes(prompt: str, model: str | None, workspace: str,
-           profile: str | None = None, provider: str | None = None) -> str:
+           profile: str | None = None, provider: str | None = None) -> HermesResponse:
     # stdin avoids shell interpolation of arbitrary user text.
     command = ["hermes"]
     if profile is not None:
         command.extend(["-p", profile])
-    command.extend(["chat", "--query-file", "-", "-Q"])
+    command.extend(["chat", "--query-file", "-", "--format", "stream-json"])
     if model is not None:
         command.extend(["-m", model])
     if provider is not None:
@@ -26,9 +34,50 @@ def hermes(prompt: str, model: str | None, workspace: str,
                     "--max-turns", "20", "--run-budget", "300"])
     proc = subprocess.run(command, input=prompt,
                           text=True, capture_output=True, timeout=360)
-    if proc.returncode:
-        raise RuntimeError(f"Hermes ({model}) failed: {proc.stderr[-1200:]}")
-    return proc.stdout.strip()
+    try:
+        events = [json.loads(line) for line in proc.stdout.splitlines()]
+        results = [event for event in events if event.get("type") == "result"]
+        if len(results) != 1:
+            raise ValueError("expected one terminal result event")
+        result = results[0]
+        if proc.returncode or result.get("exit_code") != 0:
+            raise RuntimeError(f"Hermes ({model}) failed: {result.get('error') or proc.stderr[-1200:]}")
+        if not isinstance(result.get("session_id"), str) or not isinstance(result.get("tokens"), dict):
+            raise ValueError("result missing session_id or tokens")
+        system = next((event for event in events if event.get("type") == "system"), {})
+        return HermesResponse(result["text"], result["session_id"], result["tokens"],
+                              system.get("model") or model)
+    except (ValueError, KeyError, TypeError) as exc:
+        raise RuntimeError(f"Hermes ({model}) invalid stream result: {exc}; {proc.stderr[-500:]}") from exc
+
+
+def session_cost(session_id: str, db: Path | None = None, profile: str | None = None) -> dict:
+    """Read one Hermes session's primary model usage without guessing missing prices."""
+    unknown = {"usd": None, "cost_status": "unknown", "cost_source": None}
+    if not session_id:
+        return unknown
+    if db is None:
+        if profile and profile != "default":
+            if not all(c.isalnum() or c in "_-" for c in profile):
+                return unknown
+            db = Path.home() / ".hermes/profiles" / profile / "state.db"
+        else:
+            db = Path.home() / ".hermes/state.db"
+    try:
+        with sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=2) as conn:
+            rows = conn.execute("SELECT estimated_cost_usd, actual_cost_usd, cost_status, cost_source "
+                                "FROM session_model_usage WHERE session_id = ? AND task = ''",
+                                (session_id,)).fetchall()
+    except (sqlite3.Error, OSError):
+        return unknown
+    if not rows or any(row[2] not in ("actual", "estimated", "included") or
+                       (row[2] == "actual" and row[1] is None) or
+                       (row[2] == "estimated" and row[0] is None) for row in rows):
+        return unknown
+    return {"usd": sum(row[1] if row[2] == "actual" else row[0] if row[2] == "estimated" else 0
+                       for row in rows),
+            "cost_status": rows[0][2] if len({row[2] for row in rows}) == 1 else "mixed",
+            "cost_source": rows[0][3] if len({row[3] for row in rows}) == 1 else "mixed"}
 
 
 def verify_file(workspace: str, relative: str, expected: str | None) -> bool:
@@ -96,53 +145,130 @@ def main() -> int:
     if not os.path.isdir(workspace):
         parser.error("--workspace must name an existing directory")
 
+    trace = []
+    started = time.monotonic()
+    decision_model = "laya" if args.backend == "laya" else "jev-latest"
+    decision_provider = "local" if args.backend == "laya" else "jev"
+
+    def record(kind, model, provider, action, attempt=None):
+        tick = time.monotonic()
+        step = {"kind": kind, "attempt": attempt, "elapsed_seconds": None,
+                "model": model, "provider": provider, "session_id": None,
+                "tokens": None, "usd": None, "cost_status": "unknown", "cost_source": None,
+                "evidence": None, "error": None}
+        try:
+            value = action()
+            if isinstance(value, HermesResponse):
+                step.update(model=value.model or model, session_id=value.session_id,
+                            tokens=value.tokens, **session_cost(value.session_id, profile=args.profile))
+                step["evidence"] = value.text
+            else:
+                step["evidence"] = value
+                if provider == "local":
+                    step.update(cost_status="local_no_billed_api", cost_source="local")
+            return value
+        except Exception as exc:
+            step["error"] = f"{type(exc).__name__}: {exc}"
+            if provider == "local":
+                step.update(cost_status="local_no_billed_api", cost_source="local")
+            raise
+        finally:
+            step["elapsed_seconds"] = time.monotonic() - tick
+            trace.append(step)
+
+    def attempt_number():
+        return sum(s["kind"] == "sol_implementation" for s in trace)
+
     def gate(task):
         state = ("Task: " + task + "\nExpected result: " + args.verify_file +
                  " exists in the workspace" +
                  (" and contains exactly " + repr(args.expect_text)
                   if args.expect_text is not None else "") + ".")
-        answers = decisions.ask(state, {
+        questions = {
             "specified": "Does the user request one concrete actionable outcome, rather than only discuss an idea?",
             "result_defined": "Does the request identify an observable result or artifact that could count as success?"
-        })
+        }
+        answers = record("gate", decision_model, decision_provider,
+                         lambda: decisions.ask(state, questions))
         return Gate(**answers)
 
     def implement(prompt):
-        return hermes("One task in workspace " + workspace + ". Required artifact: " +
-                      args.verify_file + ". Expected exact text (if set): " + repr(args.expect_text) +
-                      ". Original scope and subsequent diagnosis are below. "
-                      "Work only inside the workspace. Do not commit, "
-                      "push, deploy or write to external systems. Execute relevant checks, "
-                      "then report the actual artifact paths and observed test output. "
-                      "If blocked, report the blocker; never invent success.\n\n" + prompt,
-                      args.sol, workspace, profile=args.profile, provider=args.provider)
+        text = ("One task in workspace " + workspace + ". Required artifact: " +
+                args.verify_file + ". Expected exact text (if set): " + repr(args.expect_text) +
+                ". Original scope and subsequent diagnosis are below. "
+                "Work only inside the workspace. Do not commit, "
+                "push, deploy or write to external systems. Execute relevant checks, "
+                "then report the actual artifact paths and observed test output. "
+                "If blocked, report the blocker; never invent success.\n\n" + prompt)
+        return record("sol_implementation", args.sol, args.provider or "ambient",
+                      lambda: hermes(text, args.sol, workspace, profile=args.profile,
+                                     provider=args.provider), attempt_number() + 1).text
 
     def judge(task, work):
-        answers = decisions.ask(json.dumps({"request": task, "implementer_report": work}), {
+        questions = {
             "done": "Does the report describe a completed result rather than merely an intention or partial work?",
             "stays_in_scope": "Does the reported work stay within the original request, with no unrelated changes?",
             "fulfills": "Does the reported result address the requested outcome?",
             "works": "Does the report include specific observed checks or evidence that the result works?",
             "practices": "Does the report show reasonable task-appropriate practices (such as relevant testing and no obvious unsafe shortcut), without demanding perfection?"
-        })
+        }
+        answers = record("laya_judgment" if args.backend == "laya" else "jev_judgment",
+                         decision_model, decision_provider,
+                         lambda: decisions.ask(json.dumps({"request": task, "implementer_report": work}),
+                                               questions), attempt_number())
         return Verdict(answers["done"], not answers["stays_in_scope"],
                        answers["fulfills"], answers["works"], answers["practices"])
 
     def diagnose(task, work, failed):
-        return hermes("Original task:\n" + task + "\n\nRequired artifact: " + args.verify_file +
-                      "\nExpected exact text (if set): " + repr(args.expect_text) +
-                      "\n\nPrevious report:\n" + work +
-                      "\n\nFailed checks: " + ", ".join(failed) +
-                      "\nIdentify the missing input if this is a contract failure, or the "
-                      "smallest concrete repair for the next implementation attempt. "
-                      "Do not perform the task. Do not invent evidence.", args.luna, workspace,
-                      profile=args.profile, provider=args.provider)
+        prompt = ("Original task:\n" + task + "\n\nRequired artifact: " + args.verify_file +
+                  "\nExpected exact text (if set): " + repr(args.expect_text) +
+                  "\n\nPrevious report:\n" + work +
+                  "\n\nFailed checks: " + ", ".join(failed) +
+                  "\nIdentify the missing input if this is a contract failure, or the "
+                  "smallest concrete repair for the next implementation attempt. "
+                  "Do not perform the task. Do not invent evidence.")
+        return record("luna_diagnosis", args.luna, args.provider or "ambient",
+                      lambda: hermes(prompt, args.luna, workspace, profile=args.profile,
+                                     provider=args.provider), attempt_number()).text
 
     verifier = lambda task, work: verify_file(workspace, args.verify_file, args.expect_text)
     if args.test_retry_once:
         verifier = local_repair_probe(verifier)
-    result = run(args.task, gate, implement, judge, diagnose, verify=verifier)
-    print(json.dumps(result.__dict__, indent=2))
+
+    def check(task, work):
+        return record("independent_verifier", "file_check", "local",
+                      lambda: verifier(task, work), attempt_number())
+
+    def complete(outcome):
+        evidence = {"status": outcome.status, "attempts": outcome.attempts,
+                    "message": outcome.message, "implementer_report": outcome.work,
+                    "observed_control_trace": trace}
+        prompt = ("Give exactly ONE sentence assessing completion quality and confidence based only "
+                  "on this actual outcome, Laya/Jev verdicts, independent verification and observed "
+                  "evidence; Laya confidence is uncalibrated and a passing single-file check is "
+                  "not proof of full quality, so do not claim high confidence solely from those; "
+                  "acknowledge limitations and failures without inventing certainty. "
+                  "Do not perform any task or modify files.\n" + json.dumps(evidence))
+        response = record("luna_completion", args.luna, args.provider or "ambient",
+                          lambda: hermes(prompt, args.luna, workspace, profile=args.profile,
+                                         provider=args.provider))
+        text = response.text.strip()
+        if not text or len([s for s in text.replace("!", ".").replace("?", ".").split(".") if s.strip()]) != 1:
+            raise ValueError("Luna completion must be one sentence")
+        return text
+
+    try:
+        result = run(args.task, gate, implement, judge, diagnose, verify=check, complete=complete)
+    except Exception as exc:
+        result = Result("error", attempt_number(), f"{type(exc).__name__}: {exc}")
+        try:
+            result = replace(result, completion=complete(result))
+        except Exception as report_exc:
+            result = replace(result, completion_error=f"{type(report_exc).__name__}: {report_exc}")
+    print(json.dumps({**result.__dict__, "trace": trace,
+                      "total_elapsed_seconds": time.monotonic() - started,
+                      "known_cost_usd": sum(step["usd"] for step in trace if step["usd"] is not None),
+                      "unknown_cost": any(step["cost_status"] == "unknown" for step in trace)}, indent=2))
     return 0 if result.status == "verified" else 1
 
 

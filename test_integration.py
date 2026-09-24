@@ -25,20 +25,28 @@ import json, os, sys
 from pathlib import Path
 args = sys.argv[1:]
 assert "chat" in args and args[args.index("--query-file") + 1] == "-"
-assert "-Q" in args and "--source" in args and args[args.index("--source") + 1] == "tool"
+assert args[args.index("--format") + 1] == "stream-json"
+assert "--source" in args and args[args.index("--source") + 1] == "tool"
 assert args[args.index("--max-turns") + 1] == "20"
 assert args[args.index("--run-budget") + 1] == "300"
 prompt = sys.stdin.read()
-role = "luna" if prompt.startswith("Original task:") else "sol"
+role = "luna" if prompt.startswith("Original task:") or "observed_control_trace" in prompt else "sol"
 log = Path(os.environ["FAKE_LOG"])
 with log.open("a") as f: f.write(json.dumps({"args": args, "role": role, "prompt": prompt}) + "\\n")
 if role == "luna":
-    print("Artifact missing; create result.txt with the expected content.")
+    text = ("The artifact passed a limited file check with moderate confidence."
+            if "observed_control_trace" in prompt else
+            "Artifact missing; create result.txt with the expected content.")
 else:
     count = sum(json.loads(line)["role"] == "sol" for line in log.read_text().splitlines())
     if count == 2:
         (Path(args[args.index("--in") + 1]) / "result.txt").write_text("hello\\n")
-    print("Implemented; test reports success.")
+    text = "Implemented; test reports success."
+model = args[args.index("-m") + 1] if "-m" in args else "ambient-model"
+print(json.dumps({"type": "system", "model": model}))
+print(json.dumps({"type": "result", "session_id": "fake-" + str(len(log.read_text().splitlines())),
+                  "exit_code": 0, "text": text,
+                  "tokens": {"input": 5, "output": 2, "total": 7, "cache_read": 0, "cache_write": 0}}))
 '''
 
 
@@ -79,8 +87,13 @@ class IntegrationTests(unittest.TestCase):
             self.assertEqual((result["status"], result["attempts"]), ("verified", 2))
             self.assertEqual((work / "result.txt").read_text(), "hello\n")
             calls = [json.loads(line) for line in log.read_text().splitlines()]
-            self.assertEqual([call["role"] for call in calls], ["sol", "luna", "sol"])
-            self.assertIn("Artifact missing", calls[-1]["prompt"])
+            self.assertEqual([call["role"] for call in calls], ["sol", "luna", "sol", "luna"])
+            self.assertIn("Artifact missing", calls[-2]["prompt"])
+            self.assertIn("moderate confidence", result["completion"])
+            self.assertEqual([step["kind"] for step in result["trace"]],
+                             ["gate", "sol_implementation", "laya_judgment", "independent_verifier",
+                              "luna_diagnosis", "sol_implementation", "laya_judgment",
+                              "independent_verifier", "luna_completion"])
             for call in calls:
                 args = call["args"]
                 self.assertEqual(args[args.index("--in") + 1], str(work))
@@ -92,7 +105,7 @@ class IntegrationTests(unittest.TestCase):
     def test_reported_success_does_not_pass_until_actual_artifact_exists(self):
         calls = self.run_fake()
         for call in calls:
-            self.assertEqual(call["args"][:4], ["chat", "--query-file", "-", "-Q"])
+            self.assertEqual(call["args"][:6], ["chat", "--query-file", "-", "--format", "stream-json", "--source"])
             self.assertNotIn("-p", call["args"])
             self.assertNotIn("--profile", call["args"])
             self.assertNotIn("--provider", call["args"])

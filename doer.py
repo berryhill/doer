@@ -1,5 +1,5 @@
 """One task, up to three implementation attempts. The judge never executes actions."""
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable
 
 
@@ -31,20 +31,31 @@ class Result:
     attempts: int
     message: str
     work: str = ""
+    completion: str | None = None
+    completion_error: str | None = None
 
 
 def run(task: str, gate: Callable, implement: Callable, judge: Callable,
-        diagnose: Callable, max_attempts: int = 3, verify: Callable | None = None) -> Result:
+        diagnose: Callable, max_attempts: int = 3, verify: Callable | None = None,
+        complete: Callable | None = None) -> Result:
     """Run a fixed contract; always stop on the attempt limit, not necessarily success."""
+    def finish(result):
+        if complete is None:
+            return result
+        try:
+            return replace(result, completion=complete(result))
+        except Exception as exc:
+            return replace(result, completion_error=f"{type(exc).__name__}: {exc}")
+
     if not task.strip():
-        return Result("needs_input", 0, "What should I do?")
+        return finish(Result("needs_input", 0, "What should I do?"))
     if max_attempts < 1 or max_attempts > 3:
         raise ValueError("max_attempts must be between 1 and 3")
     contract = gate(task)
     if not (contract.specified and contract.result_defined):
         missing = tuple(k for k, present in (("specified", contract.specified),
                                               ("result_defined", contract.result_defined)) if not present)
-        return Result("needs_input", 0, diagnose(task, "", missing))
+        return finish(Result("needs_input", 0, diagnose(task, "", missing)))
     prompt = task
     for attempt in range(1, max_attempts + 1):
         work = implement(prompt)
@@ -54,10 +65,10 @@ def run(task: str, gate: Callable, implement: Callable, judge: Callable,
             failed += ("independent_verification",)
         if not failed:
             if verify is not None:
-                return Result("verified", attempt, "Model checks and independent verifier passed.", work)
-            return Result("judged_pass", attempt, "Jev passed the reported checks; external result not independently verified.", work)
+                return finish(Result("verified", attempt, "Model checks and independent verifier passed.", work))
+            return finish(Result("judged_pass", attempt, "Decision model passed reported checks; external result not independently verified.", work))
         if attempt == max_attempts:
-            return Result("incomplete", attempt, "Stopped at attempt limit; failed: " + ", ".join(failed), work)
+            return finish(Result("incomplete", attempt, "Stopped at attempt limit; failed: " + ", ".join(failed), work))
         feedback = diagnose(task, work, failed)
         prompt = (f"Original request (unchanged):\n{task}\n\n"
                   f"Previous attempt:\n{work}\n\n"

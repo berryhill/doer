@@ -1,3 +1,4 @@
+import json
 import unittest
 import tempfile
 from pathlib import Path
@@ -31,12 +32,15 @@ class AdapterTests(unittest.TestCase):
         from cli import hermes
         class Proc:
             returncode = 0
-            stdout = "READY"
+            stdout = json.dumps({"type": "system", "model": "ambient-model"}) + "\n" + json.dumps({
+                "type": "result", "exit_code": 0, "text": "READY", "session_id": "sid-ambient",
+                "tokens": {"input": 2, "output": 1}})
             stderr = ""
         with patch("cli.subprocess.run", return_value=Proc()) as invoke:
-            self.assertEqual(hermes("test", None, "/work"), "READY")
+            response = hermes("test", None, "/work")
+        self.assertEqual((response.text, response.model), ("READY", "ambient-model"))
         command = invoke.call_args.args[0]
-        self.assertEqual(command, ["hermes", "chat", "--query-file", "-", "-Q",
+        self.assertEqual(command, ["hermes", "chat", "--query-file", "-", "--format", "stream-json",
                                    "--source", "tool", "--in", "/work",
                                    "--max-turns", "20", "--run-budget", "300"])
         self.assertEqual(invoke.call_args.kwargs["input"], "test")
@@ -45,12 +49,13 @@ class AdapterTests(unittest.TestCase):
         from cli import hermes
         class Proc:
             returncode = 0
-            stdout = "READY"
+            stdout = json.dumps({"type": "result", "exit_code": 0, "text": "READY",
+                                 "session_id": "sid-override", "tokens": {"input": 2, "output": 1}})
             stderr = ""
         with patch("cli.subprocess.run", return_value=Proc()) as invoke:
             hermes("test", "custom-model", "/work", profile="custom", provider="custom-provider")
         command = invoke.call_args.args[0]
-        self.assertEqual(command, ["hermes", "-p", "custom", "chat", "--query-file", "-", "-Q",
+        self.assertEqual(command, ["hermes", "-p", "custom", "chat", "--query-file", "-", "--format", "stream-json",
                                    "-m", "custom-model", "--provider", "custom-provider",
                                    "--source", "tool", "--in", "/work",
                                    "--max-turns", "20", "--run-budget", "300"])
