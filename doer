@@ -1,4 +1,11 @@
 #!/bin/sh
 # One Doer task per process. Laya is loaded directly by the controller.
 root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || exit 1
-exec "$root/.venv/bin/python" "$root/cli.py" "$@"
+if [ -n "${DOER_PYTHON:-}" ]; then
+    python=$DOER_PYTHON
+elif [ -x "$root/.venv/bin/python" ]; then
+    python=$root/.venv/bin/python
+else
+    python=python3
+fi
+PYTHONPATH="$root/src${PYTHONPATH:+:$PYTHONPATH}" exec "$python" -m doer_loop.cli "$@"

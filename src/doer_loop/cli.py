@@ -9,9 +9,9 @@ import sys
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
-from decisions import make_client
-from doer import Gate, Result, Verdict, run
-from routing import CANDIDATES as MODEL_CANDIDATES, RoutingError, choose_model
+from .decisions import make_client
+from .controller import Gate, Result, Verdict, run
+from .routing import CANDIDATES as MODEL_CANDIDATES, RoutingError, choose_model
 
 
 @dataclass(frozen=True)
@@ -85,22 +85,41 @@ def session_cost(session_id: str, db: Path | None = None, profile: str | None = 
 
 def verify_file(workspace: str, relative: str, expected: str | None) -> bool:
     """Check a user-chosen artifact without following links or escaping workspace."""
+    return inspect_file(workspace, relative, expected)["passed"]
+
+
+def inspect_file(workspace: str, relative: str, expected: str | None) -> dict:
+    """Return the result of the actual check, not an implementer's assertion."""
     root = Path(workspace).resolve()
     candidate = root / relative
+    def failure(reason):
+        return {"passed": False, "observed": reason, "failure": reason}
     if Path(relative).is_absolute():
-        return False
+        return failure("artifact path is absolute; file not checked")
     try:
         parts = candidate.relative_to(root).parts
         if ".." in parts or not parts:
-            return False
+            return failure("artifact path escapes workspace; file not checked")
         for parent in (root.joinpath(*parts[:n]) for n in range(1, len(parts) + 1)):
             if parent.is_symlink():
-                return False
+                return failure(f"{relative} is a symlink path; contents not checked")
+        if not candidate.exists():
+            return failure(f"{relative} is missing")
         if not candidate.is_file() or not candidate.resolve().is_relative_to(root):
-            return False
-        return expected is None or candidate.read_text(encoding="utf-8").strip() == expected.strip()
+            return failure(f"{relative} is not a regular file inside the workspace")
+        if expected is None:
+            return {"passed": True, "observed": f"{relative} exists as a regular file; contents not checked",
+                    "failure": None}
+        actual = candidate.read_text(encoding="utf-8")
+        match = actual.strip() == expected.strip()
+        sample = repr(actual[:200]) + (" (truncated excerpt)" if len(actual) > 200 else "")
+        observation = f"{relative} exists; read UTF-8 text {sample}; stripped exact-text comparison "
+        expected_sample = repr(expected[:200]) + (" (truncated excerpt)" if len(expected) > 200 else "")
+        return {"passed": match, "observed": observation + ("passed" if match else "failed"),
+                "failure": None if match else
+                f"stripped content mismatch: expected {expected_sample}, observed {sample}"}
     except (OSError, UnicodeError, ValueError):
-        return False
+        return failure(f"{relative} could not be safely read or checked")
 
 
 def local_repair_probe(verifier):
@@ -302,13 +321,49 @@ def main() -> int:
                       lambda: hermes(prompt, args.luna, workspace, profile=args.profile,
                                      provider=args.provider), attempt_number()).text
 
-    verifier = lambda task, work: verify_file(workspace, args.verify_file, args.expect_text)
+    verifier = lambda task, work: inspect_file(workspace, args.verify_file, args.expect_text)
     if args.test_retry_once:
         verifier = local_repair_probe(verifier)
 
+    last_file_check = None
+
     def check(task, work):
-        return record("independent_verifier", "file_check", "local",
-                      lambda: verifier(task, work), attempt_number())
+        def action():
+            nonlocal last_file_check
+            result = verifier(task, work)
+            last_file_check = (result if isinstance(result, dict) else
+                               {"passed": False,
+                                "observed": "file check not performed (synthetic retry probe)",
+                                "failure": "synthetic first-check failure"})
+            return last_file_check["passed"]
+        passed = record("independent_verifier", "file_check", "local",
+                        action, attempt_number())
+        trace[-1]["evidence"] = last_file_check
+        return passed
+
+    def repair_prompt(task, work, verdict, verified, failed, feedback):
+        check = last_file_check or {"observed": "independent file check not performed",
+                                    "failure": "no recorded check"}
+        model_failures = verdict.failures()
+        judgment = ("passed all reported checks" if not model_failures else
+                    "failed " + ", ".join(model_failures))
+        file_result = ("passed" if verified else "failed (" + check["failure"] + ")")
+        keep = (f"Independent file check passed: {check['observed']}." if verified else
+                "No independently verified working behavior; preserve working parts only after checking them.")
+        artifact = (args.verify_file + (f"; expected exact text: {args.expect_text!r}"
+                                        if args.expect_text is not None else
+                                        "; expected content not specified (regular-file presence check only)"))
+        judge_label = "Laya" if args.backend == "laya" else "Jev"
+        return (f"Original task: {task}\n"
+                f"Required artifact: {artifact}\n"
+                f"Observed result: {check['observed']}\n"
+                f"Failed checks: {judge_label} judgment: {judgment}; independent file check: {file_result}\n"
+                f"Keep: {keep}\n"
+                f"Previous implementer report (not verified by the file check): {work}\n"
+                f"Luna diagnosis (suggestion, not a checked fact): {feedback}\n"
+                "Next attempt: Repair only these failures. Inspect the current workspace first; "
+                "do not assume the previous attempt was saved or correct. Run the relevant checks "
+                "and report their real output. Do not invent evidence or change unrelated files.")
 
     def complete(outcome):
         evidence = {"status": outcome.status, "attempts": outcome.attempts,
@@ -330,7 +385,7 @@ def main() -> int:
 
     try:
         result = run(args.task, gate, implement, judge, diagnose, verify=check,
-                     complete=complete, select=select)
+                     complete=complete, select=select, repair_prompt=repair_prompt)
     except Exception as exc:
         result = Result("error", attempt_number(), f"{type(exc).__name__}: {exc}")
         try:

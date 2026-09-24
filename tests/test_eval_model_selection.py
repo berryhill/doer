@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import eval_model_selection as evaluation
+from tools import eval_model_selection as evaluation
 
 
 class EvaluationTests(unittest.TestCase):

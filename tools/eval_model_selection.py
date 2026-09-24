@@ -11,7 +11,7 @@ import subprocess
 import sys
 import tempfile
 
-from routing_eval import CASES
+from .routing_eval import CASES
 
 POLICIES = ("sol", "rules", "laya")
 
@@ -51,7 +51,7 @@ def run_case(case, policy, results, available, provider=None):
         raise FileExistsError("record exists; never reuse a prior run")
     work = Path(tempfile.mkdtemp(prefix=case["id"] + "-" + policy + "-", dir=results))
     stage(case, work)
-    command = [sys.executable, str(Path(__file__).parent / "cli.py"), case["task"],
+    command = [sys.executable, "-m", "doer_loop.cli", case["task"],
                "--workspace", str(work), "--verify-file", case["verify_file"],
                "--execute", "--routing-policy", policy]
     if case["expect_text"] is not None:

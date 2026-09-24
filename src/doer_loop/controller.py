@@ -37,7 +37,8 @@ class Result:
 
 def run(task: str, gate: Callable, implement: Callable, judge: Callable,
         diagnose: Callable, max_attempts: int = 3, verify: Callable | None = None,
-        complete: Callable | None = None, select: Callable | None = None) -> Result:
+        complete: Callable | None = None, select: Callable | None = None,
+        repair_prompt: Callable | None = None) -> Result:
     """Run a fixed contract; always stop on the attempt limit, not necessarily success."""
     def finish(result):
         if complete is None:
@@ -62,7 +63,8 @@ def run(task: str, gate: Callable, implement: Callable, judge: Callable,
         work = implement(prompt, model) if select is not None else implement(prompt)
         verdict = judge(task, work)
         failed = verdict.failures()
-        if verify is not None and not verify(task, work):
+        verified = verify(task, work) if verify is not None else None
+        if verify is not None and not verified:
             failed += ("independent_verification",)
         if not failed:
             if verify is not None:
@@ -71,8 +73,11 @@ def run(task: str, gate: Callable, implement: Callable, judge: Callable,
         if attempt == max_attempts:
             return finish(Result("incomplete", attempt, "Stopped at attempt limit; failed: " + ", ".join(failed), work))
         feedback = diagnose(task, work, failed)
-        prompt = (f"Original request (unchanged):\n{task}\n\n"
-                  f"Previous attempt:\n{work}\n\n"
-                  f"Issues to address (not a new user request):\n{feedback}\n"
-                  "Stay within the original request. Recheck the result with real evidence.")
+        if repair_prompt is not None:
+            prompt = repair_prompt(task, work, verdict, verified, failed, feedback)
+        else:
+            prompt = (f"Original request (unchanged):\n{task}\n\n"
+                      f"Previous attempt:\n{work}\n\n"
+                      f"Issues to address (not a new user request):\n{feedback}\n"
+                      "Stay within the original request. Recheck the result with real evidence.")
     raise AssertionError("unreachable")

@@ -1,5 +1,5 @@
 import unittest
-from doer import run, Gate, Verdict
+from doer_loop.controller import run, Gate, Verdict
 
 
 class DoerTests(unittest.TestCase):

@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import cli
+from doer_loop import cli
 
 
 class SummaryTests(unittest.TestCase):
@@ -74,9 +74,9 @@ class SummaryTests(unittest.TestCase):
                     {"usd": 0.12, "cost_status": "actual", "cost_source": "api"})
 
         with tempfile.TemporaryDirectory() as workspace, \
-             patch("cli.make_client", return_value=Client()), \
-             patch("cli.hermes", side_effect=fake_hermes), \
-             patch("cli.session_cost", side_effect=cost), \
+             patch("doer_loop.cli.make_client", return_value=Client()), \
+             patch("doer_loop.cli.hermes", side_effect=fake_hermes), \
+             patch("doer_loop.cli.session_cost", side_effect=cost), \
              patch("sys.argv", ["doer", "create result.txt", "--workspace", workspace,
                                 "--verify-file", "result.txt", "--execute"]), \
              patch("sys.stderr", new_callable=io.StringIO) as stderr, \
@@ -104,8 +104,8 @@ class SummaryTests(unittest.TestCase):
             raise RuntimeError("Sol timed out")
 
         with tempfile.TemporaryDirectory() as workspace, \
-             patch("cli.make_client", return_value=Client()), \
-             patch("cli.hermes", side_effect=fake_hermes), \
+             patch("doer_loop.cli.make_client", return_value=Client()), \
+             patch("doer_loop.cli.hermes", side_effect=fake_hermes), \
              patch("sys.argv", ["doer", "create result.txt", "--workspace", workspace,
                                 "--verify-file", "result.txt", "--execute"]), \
              patch("sys.stderr", new_callable=io.StringIO) as stderr, \
@@ -138,9 +138,9 @@ class SummaryTests(unittest.TestCase):
             return cli.HermesResponse("reported completion", "implementation", {"output": 2})
 
         with tempfile.TemporaryDirectory() as workspace, \
-             patch("cli.make_client", return_value=Client()), \
-             patch("cli.hermes", side_effect=fake_hermes), \
-             patch("cli.session_cost", return_value={"usd": None, "cost_status": "unknown", "cost_source": None}), \
+             patch("doer_loop.cli.make_client", return_value=Client()), \
+             patch("doer_loop.cli.hermes", side_effect=fake_hermes), \
+             patch("doer_loop.cli.session_cost", return_value={"usd": None, "cost_status": "unknown", "cost_source": None}), \
              patch("sys.argv", ["doer", "create result.txt", "--workspace", workspace,
                                 "--verify-file", "result.txt", "--execute"]), \
              patch("builtins.print") as output:
@@ -150,7 +150,8 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(payload["report"], cli.format_report(payload, code))
         self.assertIn("works, independent_verification", payload["report"])
         self.assertIn('"works": false', payload["report"])
-        self.assertIn("evidence: false", payload["report"])
+        self.assertIn('"failure": "result.txt is missing"', payload["report"])
+        self.assertIn('"passed": false', payload["report"])
         self.assertEqual(len(payload["trace"]), len(payload["report"].split("\n")) - 5)
         self.assertIn("Luna completion: Checks did not pass.", payload["report"])
 

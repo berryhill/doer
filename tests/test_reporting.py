@@ -6,8 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from doer import Gate, Verdict, run
-import cli
+from doer_loop.controller import Gate, Verdict, run
+from doer_loop import cli
 
 
 class ReportingTests(unittest.TestCase):
@@ -69,13 +69,13 @@ class ReportingTests(unittest.TestCase):
             returncode = 0
             stdout = events
             stderr = ""
-        with patch("cli.subprocess.run", return_value=Proc()) as invoke:
+        with patch("doer_loop.cli.subprocess.run", return_value=Proc()) as invoke:
             response = cli.hermes("prompt", "gpt-6-luna", "/workspace")
         self.assertIn("stream-json", invoke.call_args.args[0])
         self.assertEqual(response.text, "done")
         self.assertEqual(response.session_id, "sid-1")
         self.assertEqual(response.tokens["input"], 7)
-        with patch("cli.subprocess.run", return_value=type("P", (), {"returncode": 0, "stdout": '{}', "stderr": ""})()):
+        with patch("doer_loop.cli.subprocess.run", return_value=type("P", (), {"returncode": 0, "stdout": '{}', "stderr": ""})()):
             with self.assertRaises(RuntimeError):
                 cli.hermes("prompt", "gpt-6-luna", "/workspace")
 
@@ -114,8 +114,8 @@ class ReportingTests(unittest.TestCase):
                     raise RuntimeError("completion offline")
                 (Path(workspace) / "result.txt").write_text("ok")
                 return cli.HermesResponse("observed success", "sid-sol", {"input": 4, "output": 2})
-            with patch("cli.make_client", return_value=Client()), patch("cli.hermes", side_effect=fake_hermes), \
-                 patch("cli.session_cost", return_value={"usd": None, "cost_status": "unknown", "cost_source": None}), \
+            with patch("doer_loop.cli.make_client", return_value=Client()), patch("doer_loop.cli.hermes", side_effect=fake_hermes), \
+                 patch("doer_loop.cli.session_cost", return_value={"usd": None, "cost_status": "unknown", "cost_source": None}), \
                  patch("sys.argv", ["doer", "make result", "--workspace", d, "--verify-file", "result.txt", "--execute"]), \
                  patch("builtins.print") as output:
                 code = cli.main()
@@ -145,8 +145,8 @@ class ReportingTests(unittest.TestCase):
                     return cli.HermesResponse(sentence, "sid-luna", {"input": 1, "output": 1})
                 (Path(workspace) / "result.txt").write_text("hello")
                 return cli.HermesResponse("created result.txt", "sid-sol", {"input": 1, "output": 1})
-            with patch("cli.make_client", return_value=Client()), patch("cli.hermes", side_effect=fake_hermes), \
-                 patch("cli.session_cost", return_value={"usd": 0, "cost_status": "included", "cost_source": "none"}), \
+            with patch("doer_loop.cli.make_client", return_value=Client()), patch("doer_loop.cli.hermes", side_effect=fake_hermes), \
+                 patch("doer_loop.cli.session_cost", return_value={"usd": 0, "cost_status": "included", "cost_source": "none"}), \
                  patch("sys.argv", ["doer", "create result.txt", "--workspace", d, "--verify-file", "result.txt", "--expect-text", "hello", "--execute"]), \
                  patch("builtins.print") as output:
                 code = cli.main()
@@ -166,8 +166,8 @@ class ReportingTests(unittest.TestCase):
                 if "observed_control_trace" in prompt:
                     raise RuntimeError("completion offline")
                 return cli.HermesResponse("reported success", "sid", {"input": 1, "output": 1})
-            with patch("cli.make_client", return_value=Client()), patch("cli.hermes", side_effect=fake_hermes), \
-                 patch("cli.session_cost", return_value={"usd": None, "cost_status": "unknown", "cost_source": None}), \
+            with patch("doer_loop.cli.make_client", return_value=Client()), patch("doer_loop.cli.hermes", side_effect=fake_hermes), \
+                 patch("doer_loop.cli.session_cost", return_value={"usd": None, "cost_status": "unknown", "cost_source": None}), \
                  patch("sys.argv", ["doer", "make result", "--workspace", d, "--verify-file", "result.txt", "--execute"]), \
                  patch("builtins.print") as output:
                 code = cli.main()
@@ -190,8 +190,8 @@ class ReportingTests(unittest.TestCase):
                     raise RuntimeError("Sol timed out")
                 return cli.HermesResponse("Low confidence: implementation failed.",
                                           "sid-luna", {"input": 1, "output": 5})
-            with patch("cli.make_client", return_value=Client()), patch("cli.hermes", side_effect=fake_hermes), \
-                 patch("cli.session_cost", return_value={"usd": 0, "cost_status": "included", "cost_source": "none"}), \
+            with patch("doer_loop.cli.make_client", return_value=Client()), patch("doer_loop.cli.hermes", side_effect=fake_hermes), \
+                 patch("doer_loop.cli.session_cost", return_value={"usd": 0, "cost_status": "included", "cost_source": "none"}), \
                  patch("sys.argv", ["doer", "make result", "--workspace", d, "--verify-file", "result.txt", "--execute"]), \
                  patch("builtins.print") as output:
                 code = cli.main()
