@@ -5,6 +5,7 @@ import os
 import re
 import sqlite3
 import subprocess
+import sys
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -113,6 +114,44 @@ def local_repair_probe(verifier):
         return verifier(task, work)
 
     return check
+
+
+def format_report(payload: dict, exit_code: int) -> str:
+    """Render the final recorded outcome without estimating missing usage or prices."""
+    def text(value):
+        return "unavailable" if value is None else str(value)
+
+    def cost(step):
+        status = step["cost_status"]
+        if status == "local_no_billed_api":
+            return "local unpriced compute (no billed API charge)"
+        if status == "unknown" or step["usd"] is None:
+            return "unknown"
+        label = {"included": "subscription-included API charge",
+                 "actual": "actual cost", "estimated": "estimated cost",
+                 "mixed": "mixed recorded cost"}.get(status, text(status))
+        source = step.get("cost_source")
+        return f"{label} (${step['usd']} recorded" + (f"; source: {source})" if source else ")")
+
+    completion = ("Luna completion: " + payload["completion"] if payload["completion"] is not None
+                  else "Luna completion error: " + text(payload["completion_error"]))
+    lines = [f"Outcome: {payload['status']}; exit code: {exit_code}; attempts: {payload['attempts']}",
+             completion, "Message: " + text(payload["message"]), "Trace (execution order):"]
+    for index, step in enumerate(payload["trace"], 1):
+        tokens = (json.dumps(step["tokens"], sort_keys=True) if step["tokens"] is not None
+                  else "unavailable")
+        line = (f"{index}. {step['kind']}; attempt: {text(step['attempt']) if step['attempt'] is not None else 'none'}"
+                f"; model: {text(step['model'])}; provider: {text(step['provider'])}"
+                f"; elapsed: {text(step['elapsed_seconds'])}s; tokens: {tokens}; cost: {cost(step)}")
+        if step["evidence"] is not None:
+            line += "; evidence: " + json.dumps(step["evidence"], sort_keys=True)
+        if step["error"] is not None:
+            line += "; error: " + step["error"]
+        lines.append(line)
+    lines.append(f"Total elapsed: {payload['total_elapsed_seconds']}s; "
+                 f"known cost: ${payload['known_cost_usd']}; unknown cost: "
+                 + ("yes (total cost unknown)" if payload["unknown_cost"] else "no"))
+    return "\n".join(lines)
 
 
 def main() -> int:
@@ -267,11 +306,15 @@ def main() -> int:
             result = replace(result, completion=complete(result))
         except Exception as report_exc:
             result = replace(result, completion_error=f"{type(report_exc).__name__}: {report_exc}")
-    print(json.dumps({**result.__dict__, "trace": trace,
-                      "total_elapsed_seconds": time.monotonic() - started,
-                      "known_cost_usd": sum(step["usd"] for step in trace if step["usd"] is not None),
-                      "unknown_cost": any(step["cost_status"] == "unknown" for step in trace)}, indent=2))
-    return 0 if result.status == "verified" else 1
+    exit_code = 0 if result.status == "verified" else 1
+    payload = {**result.__dict__, "trace": trace,
+               "total_elapsed_seconds": time.monotonic() - started,
+               "known_cost_usd": sum(step["usd"] for step in trace if step["usd"] is not None),
+               "unknown_cost": any(step["cost_status"] == "unknown" for step in trace)}
+    payload["report"] = format_report(payload, exit_code)
+    print(json.dumps(payload, indent=2))
+    sys.stderr.write(payload["report"] + "\n")
+    return exit_code
 
 
 if __name__ == "__main__":
