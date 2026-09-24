@@ -27,15 +27,33 @@ class AdapterTests(unittest.TestCase):
             link.symlink_to(path)
             self.assertFalse(verify_file(root, "alias.txt", "done"))
 
-    def test_hermes_calls_use_the_isolated_doer_profile(self):
+    def test_hermes_uses_ambient_configuration_by_default(self):
         from cli import hermes
         class Proc:
             returncode = 0
             stdout = "READY"
             stderr = ""
         with patch("cli.subprocess.run", return_value=Proc()) as invoke:
-            self.assertEqual(hermes("test", "gpt-6-sol-900k", "/tmp"), "READY")
-        self.assertIn("doer", invoke.call_args.args[0])
+            self.assertEqual(hermes("test", None, "/work"), "READY")
+        command = invoke.call_args.args[0]
+        self.assertEqual(command, ["hermes", "chat", "--query-file", "-", "-Q",
+                                   "--source", "tool", "--in", "/work",
+                                   "--max-turns", "20", "--run-budget", "300"])
+        self.assertEqual(invoke.call_args.kwargs["input"], "test")
+
+    def test_hermes_forwards_only_explicit_overrides(self):
+        from cli import hermes
+        class Proc:
+            returncode = 0
+            stdout = "READY"
+            stderr = ""
+        with patch("cli.subprocess.run", return_value=Proc()) as invoke:
+            hermes("test", "custom-model", "/work", profile="custom", provider="custom-provider")
+        command = invoke.call_args.args[0]
+        self.assertEqual(command, ["hermes", "-p", "custom", "chat", "--query-file", "-", "-Q",
+                                   "-m", "custom-model", "--provider", "custom-provider",
+                                   "--source", "tool", "--in", "/work",
+                                   "--max-turns", "20", "--run-budget", "300"])
 
     def test_local_repair_probe_forces_exactly_one_failed_verification(self):
         from cli import local_repair_probe

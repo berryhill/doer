@@ -21,18 +21,21 @@ class Router:
 '''
 
 FAKE_HERMES = '''#!/usr/bin/env python3
-import os, sys
+import json, os, sys
 from pathlib import Path
-args = sys.argv
-assert args[1:4] == ["-p", "doer", "chat"] and "--query-file" in args
+args = sys.argv[1:]
+assert "chat" in args and args[args.index("--query-file") + 1] == "-"
+assert "-Q" in args and "--source" in args and args[args.index("--source") + 1] == "tool"
+assert args[args.index("--max-turns") + 1] == "20"
+assert args[args.index("--run-budget") + 1] == "300"
 prompt = sys.stdin.read()
-model = args[args.index("-m") + 1]
+role = "luna" if prompt.startswith("Original task:") else "sol"
 log = Path(os.environ["FAKE_LOG"])
-with log.open("a") as f: f.write(model + " | " + prompt.replace("\\n", " ") + "\\n")
-if model == "gpt-6-luna":
+with log.open("a") as f: f.write(json.dumps({"args": args, "role": role, "prompt": prompt}) + "\\n")
+if role == "luna":
     print("Artifact missing; create result.txt with the expected content.")
 else:
-    count = sum(line.startswith("gpt-6-sol") for line in log.read_text().splitlines())
+    count = sum(json.loads(line)["role"] == "sol" for line in log.read_text().splitlines())
     if count == 2:
         (Path(args[args.index("--in") + 1]) / "result.txt").write_text("hello\\n")
     print("Implemented; test reports success.")
@@ -53,7 +56,7 @@ class IntegrationTests(unittest.TestCase):
             self.assertEqual(json.loads(completed.stdout)["status"], "verified")
             self.assertEqual((work / "result.txt").read_text().strip(), "hello")
 
-    def test_reported_success_does_not_pass_until_actual_artifact_exists(self):
+    def run_fake(self, overrides=()):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             bin_dir, work = root / "bin", root / "work"
@@ -68,18 +71,60 @@ class IntegrationTests(unittest.TestCase):
                    "PYTHONPATH": str(bin_dir), "FAKE_LOG": str(log), "FAKE_LAYA_LOG": str(laya_log)}
             completed = subprocess.run([sys.executable, str(ROOT / "cli.py"),
                                         "Create result.txt containing hello", "--workspace", str(work),
-                                        "--verify-file", "result.txt", "--expect-text", "hello", "--execute"],
+                                        "--verify-file", "result.txt", "--expect-text", "hello", "--execute",
+                                        *overrides],
                                        capture_output=True, text=True, env=env, timeout=30)
             self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
             result = json.loads(completed.stdout)
             self.assertEqual((result["status"], result["attempts"]), ("verified", 2))
             self.assertEqual((work / "result.txt").read_text(), "hello\n")
-            calls = log.read_text().splitlines()
-            self.assertEqual(sum(c.startswith("gpt-6-sol") for c in calls), 2)
-            self.assertEqual(sum(c.startswith("gpt-6-luna") for c in calls), 1)
-            self.assertIn("Artifact missing", calls[-1])
+            calls = [json.loads(line) for line in log.read_text().splitlines()]
+            self.assertEqual([call["role"] for call in calls], ["sol", "luna", "sol"])
+            self.assertIn("Artifact missing", calls[-1]["prompt"])
+            for call in calls:
+                args = call["args"]
+                self.assertEqual(args[args.index("--in") + 1], str(work))
+                self.assertNotIn("--yolo", args)
             self.assertEqual(laya_log.read_text().splitlines()[0], "load")
             self.assertEqual(len(laya_log.read_text().splitlines()), 4)  # one load, three predictions
+            return calls
+
+    def test_reported_success_does_not_pass_until_actual_artifact_exists(self):
+        calls = self.run_fake()
+        for call in calls:
+            self.assertEqual(call["args"][:4], ["chat", "--query-file", "-", "-Q"])
+            self.assertNotIn("-p", call["args"])
+            self.assertNotIn("--profile", call["args"])
+            self.assertNotIn("--provider", call["args"])
+            self.assertNotIn("-m", call["args"])
+
+    def test_explicit_overrides_reach_both_separate_chats(self):
+        calls = self.run_fake(("--profile", "alt", "--provider", "other",
+                               "--sol", "sol-model", "--luna", "luna-model"))
+        for call in calls:
+            args = call["args"]
+            self.assertEqual(args[:4], ["-p", "alt", "chat", "--query-file"])
+            self.assertEqual(args[args.index("--provider") + 1], "other")
+            self.assertEqual(args[args.index("-m") + 1],
+                             "luna-model" if call["role"] == "luna" else "sol-model")
+
+    def test_independent_partial_overrides(self):
+        for overrides, option, value in (("--profile", "-p", "alt"),
+                                         ("--provider", "--provider", "other"),
+                                         ("--sol", "-m", "sol-model"),
+                                         ("--luna", "-m", "luna-model")):
+            with self.subTest(overrides=overrides):
+                calls = self.run_fake((overrides, value))
+                for call in calls:
+                    args = call["args"]
+                    if overrides in ("--sol", "--luna") and call["role"] != overrides[2:]:
+                        self.assertNotIn("-m", args)
+                    else:
+                        self.assertEqual(args[args.index(option) + 1], value)
+                    if overrides != "--profile":
+                        self.assertNotIn("-p", args)
+                    if overrides != "--provider":
+                        self.assertNotIn("--provider", args)
 
 
 if __name__ == "__main__":

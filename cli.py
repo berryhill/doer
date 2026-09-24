@@ -2,18 +2,29 @@
 import argparse
 import json
 import os
+import sqlite3
 import subprocess
-import sys
+import time
+from dataclasses import dataclass, replace
 from pathlib import Path
 from decisions import make_client
-from doer import Gate, Verdict, run
+from doer import Gate, Result, Verdict, run
 
 
-def hermes(prompt: str, model: str, workspace: str) -> str:
+def hermes(prompt: str, model: str | None, workspace: str,
+           profile: str | None = None, provider: str | None = None) -> str:
     # stdin avoids shell interpolation of arbitrary user text.
-    proc = subprocess.run(["hermes", "-p", "doer", "chat", "--query-file", "-", "-Q", "-m", model,
-                           "--provider", "openai-codex", "--source", "tool", "--in", workspace,
-                           "--max-turns", "20", "--run-budget", "300"], input=prompt,
+    command = ["hermes"]
+    if profile is not None:
+        command.extend(["-p", profile])
+    command.extend(["chat", "--query-file", "-", "-Q"])
+    if model is not None:
+        command.extend(["-m", model])
+    if provider is not None:
+        command.extend(["--provider", provider])
+    command.extend(["--source", "tool", "--in", workspace,
+                    "--max-turns", "20", "--run-budget", "300"])
+    proc = subprocess.run(command, input=prompt,
                           text=True, capture_output=True, timeout=360)
     if proc.returncode:
         raise RuntimeError(f"Hermes ({model}) failed: {proc.stderr[-1200:]}")
@@ -65,8 +76,10 @@ def main() -> int:
                         help="Typed decision backend (default: in-process Laya)")
     parser.add_argument("--test-retry-once", action="store_true",
                         help="Local Laya smoke only: inject one failed verification to exercise Luna repair")
-    parser.add_argument("--sol", default="gpt-6-sol-900k")
-    parser.add_argument("--luna", default="gpt-6-luna")
+    parser.add_argument("--profile", help="Optional Hermes profile override")
+    parser.add_argument("--provider", help="Optional Hermes provider override")
+    parser.add_argument("--sol", help="Optional Sol model override")
+    parser.add_argument("--luna", help="Optional Luna model override")
     args = parser.parse_args()
     if not args.execute:
         print(f"Dry run ({args.backend}): pass --execute to send this task to the decision model and Hermes. No changes made.")
@@ -102,7 +115,7 @@ def main() -> int:
                       "push, deploy or write to external systems. Execute relevant checks, "
                       "then report the actual artifact paths and observed test output. "
                       "If blocked, report the blocker; never invent success.\n\n" + prompt,
-                      args.sol, workspace)
+                      args.sol, workspace, profile=args.profile, provider=args.provider)
 
     def judge(task, work):
         answers = decisions.ask(json.dumps({"request": task, "implementer_report": work}), {
@@ -122,7 +135,8 @@ def main() -> int:
                       "\n\nFailed checks: " + ", ".join(failed) +
                       "\nIdentify the missing input if this is a contract failure, or the "
                       "smallest concrete repair for the next implementation attempt. "
-                      "Do not perform the task. Do not invent evidence.", args.luna, workspace)
+                      "Do not perform the task. Do not invent evidence.", args.luna, workspace,
+                      profile=args.profile, provider=args.provider)
 
     verifier = lambda task, work: verify_file(workspace, args.verify_file, args.expect_text)
     if args.test_retry_once:

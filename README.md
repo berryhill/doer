@@ -4,7 +4,7 @@ Doer runs one task per invocation. It asks a typed decision model whether the re
 
 ## Run one task
 
-Run `./doer` from the repository root. The executable launches `cli.py` with this project's `.venv` Python. The default decision backend, Laya, loads a Router directly in the controller process, reuses it for the decisions in that task, and exits with the task. There is no Laya server, port, or background process to start. Its first live run may download the checkpoint into the Hugging Face cache; it needs no TypeSafe API key. Sol and Luna run as separate Hermes conversations through the `doer` Hermes profile; this is not a gateway bot or `/doer` command. A live run needs a working `hermes` CLI and that profile configured with model access.
+Run `./doer` from the repository root. The executable launches `cli.py` with this project's `.venv` Python. The default decision backend, Laya, loads a Router directly in the controller process, reuses it for the decisions in that task, and exits with the task. There is no Laya server, port, or background process to start. Its first live run may download the checkpoint into the Hugging Face cache; it needs no TypeSafe API key. Sol and Luna run as separate Hermes chat invocations; this is not a gateway bot or `/doer` command. No dedicated Doer profile is required. A live run still needs a working `hermes` CLI and Hermes authentication/model access configured. By default, both chats inherit the current Hermes default profile/config, credentials, model, and provider; they may use the same configured model.
 
 Use a fresh disposable workspace, not the repository root. The parent directory in this example must exist; it uses the configured `TMPDIR`, or `~/.hermes/cache/scratch` if unset:
 
@@ -21,6 +21,8 @@ Without `--execute`, Doer prints a dry-run message; it does not call models or m
 ```
 
 The workspace must exist for a live run. `--execute` invokes models and allows Sol to act; use a new disposable directory for each live task. `--verify-file` is required for live runs and names a relative artifact path inside the workspace. The independent verifier requires a regular file, rejects absolute paths, parent escapes, and symlinks in the path, and optionally compares its UTF-8 contents with `--expect-text` after stripping leading and trailing whitespace. Without `--expect-text`, it checks file presence only. `--help` lists the remaining options.
+
+Optional overrides: `--profile NAME` selects a Hermes profile, `--provider NAME` selects a provider for both chats, and `--sol MODEL` / `--luna MODEL` select their respective chat models. Only supplied overrides are forwarded; an omitted option continues to use ambient Hermes configuration. These options do not configure credentials or guarantee access to the selected models.
 
 The optional `--backend jev` uses the official TypeSafe HTTPS API instead of local Laya and requires `TYPESAFE_API_KEY` configured securely outside this repository. For example, append `--backend jev` to the live command above once credentials are available. Do not paste credentials into chat or commit them here. No live Jev call is documented as tested.
 
@@ -44,10 +46,10 @@ Opt-in real Laya/Sol smoke, which creates its own disposable temporary workspace
 DOER_LIVE_SMOKE=1 .venv/bin/python -m unittest -v test_integration.IntegrationTests.test_real_laya_and_sol_create_verified_artifact
 ```
 
-The opt-in test invokes real models and requires Hermes profile/model access; do not run it expecting an offline check.
+The opt-in test invokes real models and requires Hermes authentication/model access (no special profile); do not run it expecting an offline check.
 
 ## Safety and accuracy limits
 
-Laya judges Sol's report, not the actual quality, safety, or full behavior of the resulting code. Its `answer_confidence` is not calibrated for Doer tasks: the installed checkpoint emitted a calibration-temperature warning and missed scope drift in a small probe despite high selected-answer probability (see `RESEARCH.md` and `eval_laya.py`). Jev uses its own `confidence` field; neither score is a guarantee. The independent verifier checks only one chosen file and optional stripped text, not other files, side effects, test-suite results, or whether Sol stayed inside the workspace. An instruction to work inside the workspace is not a security sandbox. Use isolated disposable workspaces and human review; avoid consequential or untrusted tasks without additional controls.
+Laya judges Sol's report, not the actual quality, safety, or full behavior of the resulting code. Its `answer_confidence` is not calibrated for Doer tasks: the installed checkpoint emitted a calibration-temperature warning and missed scope drift in a small probe despite high selected-answer probability (see `RESEARCH.md` and `eval_laya.py`). Jev uses its own `confidence` field; neither score is a guarantee. The independent verifier checks only one chosen file and optional stripped text, not other files, side effects, test-suite results, or whether Sol stayed inside the workspace. An instruction to work inside the workspace is not a security sandbox. Hermes chats can inherit ambient profile configuration, credentials, tools, and permissions; check these before a live run. Doer does not add an automatic yolo flag, but that does not neutralize permissive ambient configuration. Use isolated disposable workspaces and human review; avoid consequential or untrusted tasks without additional controls.
 
 See `RESEARCH.md` for design context and `cli.py`, `doer.py`, and `decisions.py` for current behavior. Laya: https://github.com/NandhaKishorM/laya · Jev: https://docs.typesafe.ai/introduction/quickstart
